@@ -1,0 +1,1171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>K for Kids Books Library</title>
+<link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+<style>
+  :root {
+    --brand:     #2e7d32;
+    --brand-lt:  #e8f5e9;
+    --accent:    #ff8f00;
+  }
+
+  body { background: #f5f5f5; font-family: 'Segoe UI', sans-serif; }
+
+  /* ── Header ── */
+  .app-header {
+    background: var(--brand);
+    color: #fff;
+    padding: 14px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    box-shadow: 0 2px 8px rgba(0,0,0,.2);
+  }
+  .app-header h1 { font-size: 1.15rem; margin: 0; font-weight: 700; }
+  .app-header .subtitle { font-size: .75rem; opacity: .85; }
+
+  /* ── Search bar ── */
+  .search-bar { background: #fff; padding: 12px 16px; border-bottom: 1px solid #e0e0e0; }
+  .search-bar .input-group { max-width: 600px; }
+
+  /* ── Filters ── */
+  .filter-bar {
+    background: #fff;
+    padding: 8px 16px 10px;
+    border-bottom: 1px solid #e0e0e0;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .filter-btn {
+    border: 1px solid #ccc;
+    background: #fff;
+    border-radius: 20px;
+    padding: 4px 14px;
+    font-size: .82rem;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .filter-btn.active { background: var(--brand); color: #fff; border-color: var(--brand); }
+  .filter-label { font-size: .78rem; color: #666; margin-right: 4px; }
+
+  /* ── Stats row ── */
+  .stats-bar {
+    background: var(--brand-lt);
+    padding: 6px 16px;
+    font-size: .8rem;
+    color: #444;
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .stats-bar span { display: flex; align-items: center; gap: 4px; }
+
+  /* ── Book grid ── */
+  .books-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 14px;
+    padding: 16px;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+  @media (max-width: 480px) {
+    .books-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; padding: 10px; }
+  }
+
+  /* ── Book card ── */
+  .book-card {
+    background: #fff;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 1px 6px rgba(0,0,0,.1);
+    cursor: pointer;
+    transition: transform .15s, box-shadow .15s;
+    display: flex;
+    flex-direction: column;
+  }
+  .book-card:hover { transform: translateY(-3px); box-shadow: 0 4px 14px rgba(0,0,0,.15); }
+  .book-card.unavailable { opacity: .75; }
+
+  .book-img-wrap {
+    position: relative;
+    width: 100%;
+    padding-top: 133%; /* 3:4 ratio */
+    background: #f0f4f0;
+    overflow: hidden;
+  }
+  .book-img-wrap img {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    object-fit: cover;
+    loading: lazy;
+  }
+  .book-img-placeholder {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: #aaa;
+    font-size: 2rem;
+  }
+  .book-img-placeholder small { font-size: .65rem; margin-top: 4px; color: #bbb; }
+
+  .status-badge {
+    position: absolute;
+    top: 7px; right: 7px;
+    font-size: .65rem;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 10px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+  .badge-available { background: #43a047; color: #fff; }
+  .badge-reserved  { background: #fb8c00; color: #fff; }
+  .badge-issued    { background: #e53935; color: #fff; }
+
+  .book-info {
+    padding: 8px 10px 10px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+  .book-title {
+    font-size: .8rem;
+    font-weight: 600;
+    color: #222;
+    line-height: 1.3;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .book-meta { font-size: .7rem; color: #888; margin-top: 4px; }
+  .book-no   { font-size: .68rem; color: #bbb; margin-top: 2px; }
+
+  /* ── Admin badge on card ── */
+  .admin-card-info { font-size: .68rem; color: #555; margin-top: 5px; border-top: 1px dashed #eee; padding-top: 5px; }
+
+  /* ── Modal overrides ── */
+  .modal-header { background: var(--brand); color: #fff; }
+  .modal-header .btn-close { filter: invert(1); }
+  .modal-title { font-size: 1rem; }
+
+  .detail-img {
+    width: 120px;
+    height: 160px;
+    object-fit: cover;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.2);
+    flex-shrink: 0;
+  }
+  .detail-img-placeholder {
+    width: 120px; height: 160px;
+    background: #f0f4f0;
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 2.5rem; color: #bbb; flex-shrink: 0;
+  }
+
+  .status-pill {
+    display: inline-block;
+    padding: 3px 12px;
+    border-radius: 20px;
+    font-size: .82rem;
+    font-weight: 700;
+  }
+  .pill-available { background: #e8f5e9; color: #2e7d32; }
+  .pill-reserved  { background: #fff3e0; color: #e65100; }
+  .pill-issued    { background: #ffebee; color: #c62828; }
+
+  .form-label { font-size: .85rem; font-weight: 600; }
+
+  /* ── Admin panel ── */
+  .admin-section {
+    background: #fff3e0;
+    border: 1px solid #ffe0b2;
+    border-radius: 10px;
+    padding: 14px;
+    margin-top: 12px;
+  }
+  .admin-section h6 { color: #e65100; font-size: .85rem; font-weight: 700; margin-bottom: 10px; }
+
+  /* ── Loading / empty states ── */
+  .loading-state, .empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: #999;
+  }
+  .loading-state .spinner-border { color: var(--brand); width: 2.5rem; height: 2.5rem; }
+  .empty-state i { font-size: 3rem; }
+
+  /* ── Toast ── */
+  .toast-container { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 9999; }
+
+  /* ── Admin login bar ── */
+  .admin-bar {
+    background: #fff8e1;
+    border-bottom: 1px solid #ffe082;
+    padding: 8px 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .admin-bar.active { background: #fff3e0; border-color: #ffcc02; }
+  .admin-bar label { font-size: .82rem; font-weight: 600; color: #795548; white-space: nowrap; }
+  .admin-bar input { max-width: 180px; font-size: .82rem; }
+  .admin-bar .btn  { font-size: .82rem; }
+  .admin-mode-badge { background: var(--accent); color: #fff; border-radius: 20px; padding: 2px 12px; font-size: .78rem; font-weight: 700; }
+
+  /* ── Admin tab bar ── */
+  .admin-tab-bar {
+    background: #fff3e0;
+    border-bottom: 2px solid #ffe0b2;
+    display: flex;
+  }
+  .admin-tab {
+    background: none;
+    border: none;
+    border-bottom: 3px solid transparent;
+    padding: 10px 22px;
+    font-size: .85rem;
+    font-weight: 600;
+    color: #795548;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .admin-tab.active { color: #e65100; border-bottom-color: #e65100; background: rgba(230,81,0,.06); }
+  .admin-tab:hover  { background: rgba(230,81,0,.06); }
+
+  /* ── Customers panel ── */
+  #customersPanel { padding: 16px; max-width: 960px; margin: 0 auto; }
+  .panel-card {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 1px 6px rgba(0,0,0,.1);
+    margin-bottom: 16px;
+    overflow: hidden;
+  }
+  .panel-card-header {
+    padding: 12px 16px;
+    background: #fafafa;
+    border-bottom: 1px solid #f0f0f0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .panel-card-header h6 { margin: 0; font-weight: 700; color: #333; font-size: .9rem; }
+  .panel-card-body { padding: 16px; }
+
+  .cust-table { font-size: .82rem; width: 100%; margin: 0; }
+  .cust-table th { font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; color: #888; background: #fafafa; padding: 8px 12px; }
+  .cust-table td { padding: 8px 12px; vertical-align: middle; border-top: 1px solid #f5f5f5; }
+  .cust-table tbody tr:hover { background: #fafafa; }
+
+  .status-chip { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: .72rem; font-weight: 700; }
+  .chip-active   { background: #e8f5e9; color: #2e7d32; }
+  .chip-inactive { background: #fff3e0; color: #e65100; }
+  .chip-closed   { background: #fce4ec; color: #c62828; }
+</style>
+</head>
+<body>
+
+<!-- ══════════════ HEADER ══════════════ -->
+<header class="app-header">
+  <div>
+    <h1><i class="bi bi-book-half me-2"></i>K for Kids Library</h1>
+    <div class="subtitle">Browse · Reserve · Borrow</div>
+  </div>
+  <button class="btn btn-sm btn-outline-light" onclick="toggleAdminBar()" title="Admin">
+    <i class="bi bi-shield-lock"></i>
+  </button>
+</header>
+
+<!-- ══════════════ ADMIN LOGIN BAR ══════════════ -->
+<div class="admin-bar" id="adminBar" style="display:none">
+  <label><i class="bi bi-shield-lock me-1"></i>Admin password:</label>
+  <input type="password" id="adminPasswordInput" class="form-control form-control-sm"
+         placeholder="Enter password" onkeydown="if(event.key==='Enter') loginAdmin()">
+  <button class="btn btn-sm btn-warning" onclick="loginAdmin()">Login</button>
+  <button class="btn btn-sm btn-outline-secondary" onclick="logoutAdmin()">Logout</button>
+  <span id="adminModeBadge" style="display:none" class="admin-mode-badge">
+    <i class="bi bi-shield-check me-1"></i>Admin Mode
+  </span>
+</div>
+
+<!-- ══════════════ ADMIN TAB BAR ══════════════ -->
+<div class="admin-tab-bar" id="adminTabBar" style="display:none">
+  <button class="admin-tab active" id="tabBooks" onclick="switchAdminTab('books')">
+    <i class="bi bi-book me-1"></i>Books
+  </button>
+  <button class="admin-tab" id="tabCustomers" onclick="switchAdminTab('customers')">
+    <i class="bi bi-people me-1"></i>Customers
+  </button>
+</div>
+
+<!-- ══════════════ SEARCH ══════════════ -->
+<div class="search-bar" id="searchBarEl">
+  <div class="input-group">
+    <span class="input-group-text bg-white"><i class="bi bi-search text-muted"></i></span>
+    <input type="text" id="searchInput" class="form-control" placeholder="Search by title, author, or book number…"
+           oninput="debouncedSearch()">
+    <button class="btn btn-outline-secondary" onclick="clearSearch()" title="Clear">
+      <i class="bi bi-x"></i>
+    </button>
+  </div>
+</div>
+
+<!-- ══════════════ FILTERS ══════════════ -->
+<div class="filter-bar" id="filterBarEl">
+  <span class="filter-label">Language:</span>
+  <button class="filter-btn active" data-filter="language" data-value="" onclick="setFilter('language','',this)">All</button>
+  <button class="filter-btn" data-filter="language" data-value="marathi" onclick="setFilter('language','marathi',this)">Marathi</button>
+  <button class="filter-btn" data-filter="language" data-value="english" onclick="setFilter('language','english',this)">English</button>
+
+  <span class="filter-label ms-3">Status:</span>
+  <button class="filter-btn active" data-filter="status" data-value="" onclick="setFilter('status','',this)">All</button>
+  <button class="filter-btn" data-filter="status" data-value="available" onclick="setFilter('status','available',this)">
+    <span class="text-success">●</span> Available
+  </button>
+  <button class="filter-btn" data-filter="status" data-value="reserved" onclick="setFilter('status','reserved',this)">
+    <span style="color:orange">●</span> Reserved
+  </button>
+  <button class="filter-btn" data-filter="status" data-value="issued" onclick="setFilter('status','issued',this)">
+    <span class="text-danger">●</span> Issued
+  </button>
+</div>
+
+<!-- ══════════════ STATS ══════════════ -->
+<div class="stats-bar" id="statsBar" style="display:none">
+  <span><i class="bi bi-collection text-muted"></i> <b id="statTotal">0</b> books</span>
+  <span><i class="bi bi-check-circle" style="color:#43a047"></i> <b id="statAvailable">0</b> available</span>
+  <span><i class="bi bi-bookmark" style="color:orange"></i> <b id="statReserved">0</b> reserved</span>
+  <span><i class="bi bi-person-check" style="color:#e53935"></i> <b id="statIssued">0</b> issued</span>
+</div>
+
+<!-- ══════════════ MAIN CONTENT ══════════════ -->
+<main>
+  <div class="loading-state" id="loadingState">
+    <div class="spinner-border mb-3"></div>
+    <div>Loading books…</div>
+  </div>
+
+  <div class="empty-state" id="emptyState" style="display:none">
+    <i class="bi bi-search d-block mb-2"></i>
+    <div>No books match your search.</div>
+    <button class="btn btn-sm btn-outline-secondary mt-3" onclick="clearSearch(); resetFilters()">Clear filters</button>
+  </div>
+
+  <div class="books-grid" id="booksGrid"></div>
+  <div id="scrollSentinel" style="display:none" class="text-center py-4">
+    <div class="spinner-border spinner-border-sm text-secondary" role="status"></div>
+  </div>
+</main>
+
+<!-- ══════════════ CUSTOMERS PANEL (Admin only) ══════════════ -->
+<div id="customersPanel" style="display:none">
+
+  <!-- Add Customer -->
+  <div class="panel-card">
+    <div class="panel-card-header">
+      <h6><i class="bi bi-person-plus me-2 text-success"></i>Add New Customer</h6>
+      <button class="btn btn-sm btn-outline-secondary" onclick="toggleAddForm()">
+        <i class="bi bi-chevron-down" id="addFormChevron"></i>
+      </button>
+    </div>
+    <div id="addCustForm" class="panel-card-body" style="display:none">
+      <div class="row g-2">
+        <div class="col-sm-6">
+          <label class="form-label">Full Name <span class="text-danger">*</span></label>
+          <input type="text" id="cName" class="form-control form-control-sm" placeholder="e.g. Rudransh Joshi">
+        </div>
+        <div class="col-sm-6">
+          <label class="form-label">Date of Start</label>
+          <input type="date" id="cDate" class="form-control form-control-sm">
+        </div>
+        <div class="col-sm-6">
+          <label class="form-label">Location</label>
+          <input type="text" id="cLocation" class="form-control form-control-sm" placeholder="e.g. Right Bhusari">
+        </div>
+        <div class="col-sm-6">
+          <label class="form-label">Address</label>
+          <input type="text" id="cAddress" class="form-control form-control-sm" placeholder="Full address">
+        </div>
+      </div>
+      <div class="mt-3">
+        <button class="btn btn-success btn-sm" onclick="submitAddCustomer()">
+          <i class="bi bi-person-plus me-1"></i>Add Customer
+        </button>
+        <button class="btn btn-outline-secondary btn-sm ms-2" onclick="toggleAddForm()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Customer List -->
+  <div class="panel-card">
+    <div class="panel-card-header">
+      <h6><i class="bi bi-people me-2"></i>All Customers</h6>
+      <div class="d-flex gap-2 align-items-center">
+        <input type="text" id="custSearch" class="form-control form-control-sm" placeholder="Search…"
+               style="max-width:160px" oninput="filterCustomers()">
+        <button class="btn btn-sm btn-outline-secondary" onclick="loadCustomers()">
+          <i class="bi bi-arrow-clockwise"></i>
+        </button>
+      </div>
+    </div>
+    <div id="custLoadingState" class="text-center py-4 text-muted" style="display:none">
+      <div class="spinner-border spinner-border-sm me-2"></div>Loading…
+    </div>
+    <div id="custEmptyState" class="text-center py-4 text-muted" style="display:none">
+      <i class="bi bi-people d-block mb-2" style="font-size:2rem"></i>No customers found.
+    </div>
+    <div style="overflow-x:auto">
+      <table class="cust-table" id="custTable" style="display:none">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Name</th>
+            <th>Location</th>
+            <th>Since</th>
+            <th>Status</th>
+            <th>Update Status</th>
+          </tr>
+        </thead>
+        <tbody id="custTableBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<!-- ══════════════ BOOK DETAIL MODAL ══════════════ -->
+<div class="modal fade" id="bookModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="modalTitle">Book Details</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="modalBody">
+        <!-- Dynamic content injected here -->
+      </div>
+      <div class="modal-footer" id="modalFooter">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════ RESERVE MODAL ══════════════ -->
+<div class="modal fade" id="reserveModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-bookmark-plus me-2"></i>Reserve Book</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted small mb-3" id="reserveBookTitle"></p>
+        <div class="mb-3">
+          <label class="form-label">Your Name <span class="text-danger">*</span></label>
+          <input type="text" id="rName" class="form-control" placeholder="Full name">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Phone Number</label>
+          <input type="tel" id="rPhone" class="form-control" placeholder="10-digit mobile">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Preferred Pickup Date</label>
+          <input type="date" id="rDate" class="form-control">
+        </div>
+        <div class="mb-1">
+          <label class="form-label">Notes (optional)</label>
+          <textarea id="rNotes" class="form-control" rows="2" placeholder="Any special requests…"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-success" onclick="submitReservation()">
+          <i class="bi bi-bookmark-check me-1"></i>Confirm Reserve
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════ ADMIN ISSUE MODAL ══════════════ -->
+<div class="modal fade" id="issueModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header" style="background:#e65100;">
+        <h5 class="modal-title text-white"><i class="bi bi-person-check me-2"></i>Issue Book</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" style="filter:invert(1)"></button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted small mb-3" id="issueBookTitle"></p>
+        <div class="mb-3">
+          <label class="form-label">Subscriber Name <span class="text-danger">*</span></label>
+          <input type="text" id="iSubscriber" class="form-control" placeholder="Name of subscriber">
+        </div>
+        <div class="mb-1">
+          <label class="form-label">Issue Date</label>
+          <input type="date" id="iDate" class="form-control">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-warning" onclick="submitIssue()">
+          <i class="bi bi-check2 me-1"></i>Mark as Issued
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════ TOAST ══════════════ -->
+<div class="toast-container">
+  <div id="appToast" class="toast align-items-center border-0 text-white" role="alert" style="min-width:280px">
+    <div class="d-flex">
+      <div class="toast-body" id="toastMsg"></div>
+      <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/js/bootstrap.bundle.min.js"></script>
+<script>
+// ════════════════════════════════════════════════
+// State
+// ════════════════════════════════════════════════
+let allBooks     = [];
+let filtered     = [];
+let activeBook   = null;
+let adminMode    = false;
+let adminPass    = '';
+let searchTimer  = null;
+let filters      = { language: '', status: '', search: '' };
+
+const bookModal    = new bootstrap.Modal('#bookModal');
+const reserveModal = new bootstrap.Modal('#reserveModal');
+const issueModal   = new bootstrap.Modal('#issueModal');
+
+// ════════════════════════════════════════════════
+// Init
+// ════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', () => {
+  // Set today as default date in date pickers
+  const today = new Date().toISOString().split('T')[0];
+  document.getElementById('rDate').value = today;
+  document.getElementById('iDate').value = today;
+  loadBooks();
+
+  // Infinite scroll: load more books when sentinel comes into view
+  const sentinel = document.getElementById('scrollSentinel');
+  const observer = new IntersectionObserver(entries => {
+    if (entries[0].isIntersecting) appendBooks();
+  }, { rootMargin: '200px' });
+  observer.observe(sentinel);
+});
+
+function loadBooks() {
+  showLoading(true);
+  google.script.run
+    .withSuccessHandler(onBooksLoaded)
+    .withFailureHandler(onError)
+    .getBooks(null, adminPass);
+}
+
+function onBooksLoaded(result) {
+  showLoading(false);
+  if (!result.success) { showToast(result.error || 'Failed to load books.', 'danger'); return; }
+  allBooks = result.books || [];
+  applyFilters();
+}
+
+// ════════════════════════════════════════════════
+// Filtering & search
+// ════════════════════════════════════════════════
+function applyFilters() {
+  const q  = filters.search.toLowerCase();
+  const lg = filters.language.toLowerCase();
+  const st = filters.status.toLowerCase();
+
+  filtered = allBooks.filter(b => {
+    if (lg && b.language.toLowerCase() !== lg) return false;
+    if (st && b.status.toLowerCase()   !== st) return false;
+    if (q && !b.bookName.toLowerCase().includes(q) &&
+             !b.author.toLowerCase().includes(q)   &&
+             !b.bookNo.toLowerCase().includes(q))   return false;
+    return true;
+  });
+
+  renderGrid();
+  updateStats();
+}
+
+function debouncedSearch() {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    filters.search = document.getElementById('searchInput').value.trim();
+    applyFilters();
+  }, 300);
+}
+
+function setFilter(type, value, el) {
+  filters[type] = value;
+  // Update active button
+  document.querySelectorAll('[data-filter="' + type + '"]').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+  applyFilters();
+}
+
+function clearSearch() {
+  document.getElementById('searchInput').value = '';
+  filters.search = '';
+  applyFilters();
+}
+
+function resetFilters() {
+  filters = { language: '', status: '', search: '' };
+  document.querySelectorAll('.filter-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.value === '');
+  });
+  applyFilters();
+}
+
+// ════════════════════════════════════════════════
+// Render (infinite scroll)
+// ════════════════════════════════════════════════
+const PAGE_SIZE = 24;
+let renderOffset = 0;
+
+function bookCardHtml(book) {
+  const sc  = statusClass(book.status);
+  const imgHtml = book.imageUrl
+    ? `<img src="${book.imageUrl}" alt="${escHtml(book.bookName)}" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">`
+    : '';
+  const placeholder = `<div class="book-img-placeholder" ${book.imageUrl ? 'style="display:none"' : ''}>
+      <i class="bi bi-book"></i><small>${escHtml(book.bookNo)}</small></div>`;
+  const adminInfo = adminMode && (book.reservedBy || book.issuedTo)
+    ? `<div class="admin-card-info">
+        ${book.reservedBy ? '<i class="bi bi-bookmark me-1" style="color:orange"></i>' + escHtml(book.reservedBy) : ''}
+        ${book.issuedTo   ? '<i class="bi bi-person me-1"></i>' + escHtml(book.issuedTo)   : ''}
+      </div>`
+    : '';
+  return `<div class="book-card ${book.status !== 'Available' ? 'unavailable' : ''}"
+                onclick="openBookDetail('${escHtml(book.bookNo)}')">
+    <div class="book-img-wrap">
+      ${imgHtml}${placeholder}
+      <span class="status-badge badge-${sc}">${book.status}</span>
+    </div>
+    <div class="book-info">
+      <div class="book-title">${escHtml(book.bookName)}</div>
+      <div class="book-meta">${escHtml(book.author || '—')}</div>
+      <div class="book-no">${escHtml(book.bookNo)} · ${escHtml(book.language)}</div>
+      ${adminInfo}
+    </div>
+  </div>`;
+}
+
+function appendBooks() {
+  const grid     = document.getElementById('booksGrid');
+  const sentinel = document.getElementById('scrollSentinel');
+  const slice    = filtered.slice(renderOffset, renderOffset + PAGE_SIZE);
+  if (!slice.length) { sentinel.style.display = 'none'; return; }
+  grid.insertAdjacentHTML('beforeend', slice.map(bookCardHtml).join(''));
+  renderOffset += slice.length;
+  sentinel.style.display = renderOffset < filtered.length ? '' : 'none';
+}
+
+function renderGrid() {
+  const grid  = document.getElementById('booksGrid');
+  const empty = document.getElementById('emptyState');
+
+  grid.innerHTML = '';
+  renderOffset   = 0;
+
+  if (filtered.length === 0) {
+    empty.style.display = '';
+    document.getElementById('scrollSentinel').style.display = 'none';
+    return;
+  }
+  empty.style.display = 'none';
+  appendBooks();
+}
+
+function updateStats() {
+  const avail    = allBooks.filter(b => b.status === 'Available').length;
+  const reserved = allBooks.filter(b => b.status === 'Reserved').length;
+  const issued   = allBooks.filter(b => b.status === 'Issued').length;
+
+  document.getElementById('statTotal').textContent     = allBooks.length;
+  document.getElementById('statAvailable').textContent = avail;
+  document.getElementById('statReserved').textContent  = reserved;
+  document.getElementById('statIssued').textContent    = issued;
+  document.getElementById('statsBar').style.display    = '';
+}
+
+// ════════════════════════════════════════════════
+// Book detail modal
+// ════════════════════════════════════════════════
+function openBookDetail(bookNo) {
+  const book = allBooks.find(b => b.bookNo === bookNo);
+  if (!book) return;
+  activeBook = book;
+
+  document.getElementById('modalTitle').textContent = book.bookNo;
+
+  const imgPart = book.imageUrl
+    ? `<img src="${book.imageUrl}" class="detail-img" alt="" onerror="this.outerHTML='<div class=\'detail-img-placeholder\'><i class=\'bi bi-book\'></i></div>'">`
+    : `<div class="detail-img-placeholder"><i class="bi bi-book"></i></div>`;
+
+  const sc    = statusClass(book.status);
+  const pill  = `<span class="status-pill pill-${sc}">${book.status}</span>`;
+
+  let reservationInfo = '';
+  if (book.status === 'Reserved') {
+    reservationInfo = `
+      <div class="alert alert-warning py-2 px-3 mt-2 mb-0" style="font-size:.82rem">
+        <i class="bi bi-bookmark-fill me-1"></i>
+        Reserved by <b>${escHtml(book.reservedBy)}</b>
+        ${book.pickupDate ? ' · Pickup: <b>' + escHtml(book.pickupDate) + '</b>' : ''}
+        ${adminMode && book.phone ? '<br>📞 ' + escHtml(book.phone) : ''}
+        ${book.notes ? '<br><i>' + escHtml(book.notes) + '</i>' : ''}
+      </div>`;
+  } else if (book.status === 'Issued') {
+    reservationInfo = adminMode
+      ? `<div class="alert alert-danger py-2 px-3 mt-2 mb-0" style="font-size:.82rem">
+           <i class="bi bi-person-fill me-1"></i>
+           Issued to <b>${escHtml(book.issuedTo)}</b>
+           ${book.issueDate ? ' on <b>' + escHtml(book.issueDate) + '</b>' : ''}
+         </div>`
+      : `<div class="alert alert-danger py-2 px-3 mt-2 mb-0" style="font-size:.82rem">
+           <i class="bi bi-person-fill me-1"></i>
+           This book is currently issued out.
+         </div>`;
+  }
+
+  document.getElementById('modalBody').innerHTML = `
+    <div class="d-flex gap-3 mb-3">
+      ${imgPart}
+      <div>
+        <h6 class="mb-1 fw-bold">${escHtml(book.bookName)}</h6>
+        <div class="text-muted small mb-1">${escHtml(book.author || '—')}</div>
+        <div class="text-muted small mb-2">${escHtml(book.publication || '—')}</div>
+        <div class="mb-1 small"><span class="text-muted">Language:</span> ${escHtml(book.language)}</div>
+        <div class="mb-2">${pill}</div>
+      </div>
+    </div>
+    ${reservationInfo}
+    ${buildAdminSection(book)}
+  `;
+
+  // Footer actions
+  const footer = document.getElementById('modalFooter');
+  let reserveBtn = '';
+  if (book.status === 'Available') {
+    reserveBtn = `<button class="btn btn-success" onclick="openReserve()">
+      <i class="bi bi-bookmark-plus me-1"></i>Reserve This Book
+    </button>`;
+  }
+  footer.innerHTML = `<button class="btn btn-secondary" data-bs-dismiss="modal">Close</button>${reserveBtn}`;
+
+  bookModal.show();
+}
+
+function buildAdminSection(book) {
+  if (!adminMode) return '';
+
+  const actions = [];
+
+  if (book.status === 'Available' || book.status === 'Reserved') {
+    actions.push(`<button class="btn btn-sm btn-warning" onclick="openIssue()">
+      <i class="bi bi-person-check me-1"></i>Mark as Issued
+    </button>`);
+  }
+  if (book.status === 'Reserved') {
+    actions.push(`<button class="btn btn-sm btn-outline-danger" onclick="doAdminAction('cancelReservation','${escHtml(book.bookNo)}')">
+      <i class="bi bi-x-circle me-1"></i>Cancel Reservation
+    </button>`);
+  }
+  if (book.status === 'Issued') {
+    actions.push(`<button class="btn btn-sm btn-outline-success" onclick="doAdminAction('returnBook','${escHtml(book.bookNo)}')">
+      <i class="bi bi-arrow-return-left me-1"></i>Mark as Returned
+    </button>`);
+  }
+
+  return `<div class="admin-section">
+    <h6><i class="bi bi-shield-lock me-1"></i>Admin Actions</h6>
+    <div class="d-flex gap-2 flex-wrap">${actions.join('')}</div>
+  </div>`;
+}
+
+// ════════════════════════════════════════════════
+// Reserve flow
+// ════════════════════════════════════════════════
+function openReserve() {
+  if (!activeBook) return;
+  document.getElementById('reserveBookTitle').textContent = '📚 ' + activeBook.bookName + ' (' + activeBook.bookNo + ')';
+  document.getElementById('rName').value  = '';
+  document.getElementById('rPhone').value = '';
+  document.getElementById('rNotes').value = '';
+  bookModal.hide();
+  setTimeout(() => reserveModal.show(), 300);
+}
+
+function submitReservation() {
+  const name  = document.getElementById('rName').value.trim();
+  const phone = document.getElementById('rPhone').value.trim();
+  const date  = document.getElementById('rDate').value;
+  const notes = document.getElementById('rNotes').value.trim();
+
+  if (!name) { showToast('Please enter your name.', 'warning'); return; }
+  if (!activeBook) return;
+
+  setButtonLoading('reserveModal', true);
+
+  google.script.run
+    .withSuccessHandler(res => {
+      setButtonLoading('reserveModal', false);
+      reserveModal.hide();
+      if (res.success) {
+        showToast(res.message, 'success');
+        refreshBook(activeBook.bookNo, 'Reserved', name, phone, date, notes);
+      } else {
+        showToast(res.error || 'Reservation failed.', 'danger');
+      }
+    })
+    .withFailureHandler(err => {
+      setButtonLoading('reserveModal', false);
+      showToast('Error: ' + err.message, 'danger');
+    })
+    .reserveBook(activeBook.bookNo, name, phone, date, notes);
+}
+
+// ════════════════════════════════════════════════
+// Admin: issue flow
+// ════════════════════════════════════════════════
+function openIssue() {
+  if (!activeBook) return;
+  // Pre-fill subscriber name from reservation if exists
+  document.getElementById('iSubscriber').value = activeBook.reservedBy || activeBook.issuedTo || '';
+  document.getElementById('issueBookTitle').textContent = '📚 ' + activeBook.bookName + ' (' + activeBook.bookNo + ')';
+  bookModal.hide();
+  setTimeout(() => issueModal.show(), 300);
+}
+
+function submitIssue() {
+  const subscriber = document.getElementById('iSubscriber').value.trim();
+  const date       = document.getElementById('iDate').value;
+
+  if (!subscriber) { showToast('Please enter subscriber name.', 'warning'); return; }
+  if (!activeBook)  return;
+
+  setButtonLoading('issueModal', true);
+
+  google.script.run
+    .withSuccessHandler(res => {
+      setButtonLoading('issueModal', false);
+      issueModal.hide();
+      if (res.success) {
+        showToast(res.message, 'success');
+        refreshBook(activeBook.bookNo, 'Issued', subscriber, '', date, '');
+      } else {
+        showToast(res.error || 'Failed.', 'danger');
+      }
+    })
+    .withFailureHandler(err => {
+      setButtonLoading('issueModal', false);
+      showToast('Error: ' + err.message, 'danger');
+    })
+    .issueBook(activeBook.bookNo, subscriber, date, adminPass);
+}
+
+// ════════════════════════════════════════════════
+// Admin: cancel / return
+// ════════════════════════════════════════════════
+function doAdminAction(action, bookNo) {
+  const labels = { cancelReservation: 'Cancel reservation', returnBook: 'Mark as returned' };
+  if (!confirm(labels[action] + '?')) return;
+
+  bookModal.hide();
+
+  google.script.run
+    .withSuccessHandler(res => {
+      if (res.success) {
+        showToast(res.message, 'success');
+        if (action === 'cancelReservation') refreshBook(bookNo, 'Available', '', '', '', '');
+        if (action === 'returnBook')        refreshBook(bookNo, 'Available', '', '', '', '');
+      } else {
+        showToast(res.error || 'Failed.', 'danger');
+      }
+    })
+    .withFailureHandler(err => showToast('Error: ' + err.message, 'danger'))
+    [action](bookNo, adminPass);
+}
+
+// ════════════════════════════════════════════════
+// Admin login
+// ════════════════════════════════════════════════
+function toggleAdminBar() {
+  const bar = document.getElementById('adminBar');
+  bar.style.display = bar.style.display === 'none' ? 'flex' : 'none';
+}
+
+function loginAdmin() {
+  const pwd = document.getElementById('adminPasswordInput').value;
+  if (!pwd) return;
+
+  google.script.run
+    .withSuccessHandler(ok => {
+      if (ok) {
+        adminMode = true;
+        adminPass = pwd;
+        document.getElementById('adminModeBadge').style.display = '';
+        document.getElementById('adminPasswordInput').value     = '';
+        document.getElementById('adminTabBar').style.display    = '';
+        showToast('Admin mode active.', 'success');
+        loadBooks(); // reload with admin-only fields
+      } else {
+        showToast('Incorrect password.', 'danger');
+      }
+    })
+    .withFailureHandler(err => showToast('Error: ' + err.message, 'danger'))
+    .verifyAdminPassword(pwd);
+}
+
+function logoutAdmin() {
+  adminMode      = false;
+  adminPass      = '';
+  allCustomers   = [];
+  activeAdminTab = 'books';
+  document.getElementById('adminModeBadge').style.display  = 'none';
+  document.getElementById('adminBar').style.display        = 'none';
+  document.getElementById('adminTabBar').style.display     = 'none';
+  document.getElementById('customersPanel').style.display  = 'none';
+  document.getElementById('searchBarEl').style.display     = '';
+  document.getElementById('filterBarEl').style.display     = '';
+  document.querySelector('main').style.display             = '';
+  showToast('Logged out of admin mode.', 'secondary');
+  loadBooks(); // reload without admin-only fields
+}
+
+// ════════════════════════════════════════════════
+// Helpers
+// ════════════════════════════════════════════════
+
+/** Optimistically update a book in local state instead of full reload */
+function refreshBook(bookNo, status, issuedTo, phone, date, notes) {
+  const idx = allBooks.findIndex(b => b.bookNo === bookNo);
+  if (idx === -1) { loadBooks(); return; }
+
+  allBooks[idx] = {
+    ...allBooks[idx],
+    status,
+    issuedTo:   status === 'Issued'   ? issuedTo : '',
+    reservedBy: status === 'Reserved' ? issuedTo : '',
+    phone:      status === 'Reserved' ? phone    : '',
+    pickupDate: status === 'Reserved' ? date     : '',
+    issueDate:  status === 'Issued'   ? date     : '',
+    notes
+  };
+  activeBook = allBooks[idx];
+  applyFilters();
+}
+
+function statusClass(status) {
+  return { 'Available': 'available', 'Reserved': 'reserved', 'Issued': 'issued' }[status] || 'available';
+}
+
+function showLoading(show) {
+  document.getElementById('loadingState').style.display = show ? '' : 'none';
+  document.getElementById('booksGrid').style.display    = show ? 'none' : '';
+}
+
+function showToast(msg, type) {
+  const el = document.getElementById('appToast');
+  const colors = { success: '#2e7d32', danger: '#c62828', warning: '#e65100', secondary: '#555' };
+  el.style.background = colors[type] || '#333';
+  document.getElementById('toastMsg').textContent = msg;
+  bootstrap.Toast.getOrCreateInstance(el, { delay: 3500 }).show();
+}
+
+function onError(err) {
+  showLoading(false);
+  showToast('Error: ' + (err.message || err), 'danger');
+}
+
+function setButtonLoading(modalId, loading) {
+  const modal = document.getElementById(modalId);
+  const btn   = modal.querySelector('.modal-footer .btn:last-child');
+  if (!btn) return;
+  btn.disabled = loading;
+  btn.innerHTML = loading
+    ? '<span class="spinner-border spinner-border-sm me-1"></span>Please wait…'
+    : btn.getAttribute('data-label') || btn.innerHTML;
+}
+
+function escHtml(str) {
+  return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ════════════════════════════════════════════════
+// Admin tabs
+// ════════════════════════════════════════════════
+let activeAdminTab = 'books';
+
+function switchAdminTab(tab) {
+  activeAdminTab = tab;
+  document.getElementById('tabBooks').classList.toggle('active', tab === 'books');
+  document.getElementById('tabCustomers').classList.toggle('active', tab === 'customers');
+
+  const booksUI = [
+    document.getElementById('searchBarEl'),
+    document.getElementById('filterBarEl'),
+    document.getElementById('statsBar'),
+    document.querySelector('main')
+  ];
+  const showBooks = tab === 'books';
+  booksUI.forEach(el => { if (el) el.style.display = showBooks ? '' : 'none'; });
+  document.getElementById('customersPanel').style.display = showBooks ? 'none' : '';
+
+  if (tab === 'customers' && allCustomers.length === 0) loadCustomers();
+}
+
+// ════════════════════════════════════════════════
+// Customers
+// ════════════════════════════════════════════════
+let allCustomers = [];
+
+function loadCustomers() {
+  document.getElementById('custLoadingState').style.display = '';
+  document.getElementById('custTable').style.display        = 'none';
+  document.getElementById('custEmptyState').style.display   = 'none';
+
+  google.script.run
+    .withSuccessHandler(res => {
+      document.getElementById('custLoadingState').style.display = 'none';
+      if (!res.success) { showToast(res.error || 'Failed to load customers.', 'danger'); return; }
+      allCustomers = res.customers || [];
+      renderCustomers(allCustomers);
+    })
+    .withFailureHandler(err => {
+      document.getElementById('custLoadingState').style.display = 'none';
+      showToast('Error: ' + err.message, 'danger');
+    })
+    .getCustomers(adminPass);
+}
+
+function filterCustomers() {
+  const q = document.getElementById('custSearch').value.toLowerCase();
+  const filtered = allCustomers.filter(c =>
+    c.name.toLowerCase().includes(q) ||
+    (c.location || '').toLowerCase().includes(q) ||
+    (c.status   || '').toLowerCase().includes(q)
+  );
+  renderCustomers(filtered);
+}
+
+function renderCustomers(list) {
+  const tbody = document.getElementById('custTableBody');
+  const table = document.getElementById('custTable');
+  const empty = document.getElementById('custEmptyState');
+
+  if (!list.length) {
+    table.style.display = 'none';
+    empty.style.display = '';
+    return;
+  }
+  empty.style.display = 'none';
+  table.style.display = '';
+
+  tbody.innerHTML = list.map((c, idx) => {
+    const chipClass = { Active: 'chip-active', Inactive: 'chip-inactive', Closed: 'chip-closed' }[c.status] || 'chip-active';
+    return `<tr>
+      <td class="text-muted">${escHtml(c.srNo || idx + 1)}</td>
+      <td><b>${escHtml(c.name)}</b>${c.address ? '<br><small class="text-muted">' + escHtml(c.address) + '</small>' : ''}</td>
+      <td>${escHtml(c.location || '—')}</td>
+      <td class="text-muted">${escHtml(c.dateStart || '—')}</td>
+      <td><span class="status-chip ${chipClass}">${escHtml(c.status)}</span></td>
+      <td>
+        <div class="d-flex gap-1">
+          <select class="form-select form-select-sm" id="status_${idx}" style="max-width:110px">
+            <option ${c.status==='Active'   ? 'selected' : ''}>Active</option>
+            <option ${c.status==='Inactive' ? 'selected' : ''}>Inactive</option>
+            <option ${c.status==='Closed'   ? 'selected' : ''}>Closed</option>
+          </select>
+          <button class="btn btn-sm btn-outline-warning" onclick="doUpdateStatus('${escHtml(c.name)}', ${idx})">
+            <i class="bi bi-check2"></i>
+          </button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function doUpdateStatus(customerName, idx) {
+  const newStatus = document.getElementById('status_' + idx).value;
+  google.script.run
+    .withSuccessHandler(res => {
+      if (res.success) {
+        showToast(res.message, 'success');
+        loadCustomers(); // refresh list
+      } else {
+        showToast(res.error || 'Update failed.', 'danger');
+      }
+    })
+    .withFailureHandler(err => showToast('Error: ' + err.message, 'danger'))
+    .updateCustomerStatus(customerName, newStatus, adminPass);
+}
+
+function toggleAddForm() {
+  const form    = document.getElementById('addCustForm');
+  const chevron = document.getElementById('addFormChevron');
+  const visible = form.style.display !== 'none';
+  form.style.display    = visible ? 'none' : '';
+  chevron.className     = visible ? 'bi bi-chevron-down' : 'bi bi-chevron-up';
+  if (!visible) {
+    const today = new Date().toISOString().split('T')[0];
+    document.getElementById('cDate').value = today;
+  }
+}
+
+function submitAddCustomer() {
+  const name     = document.getElementById('cName').value.trim();
+  const date     = document.getElementById('cDate').value;
+  const location = document.getElementById('cLocation').value.trim();
+  const address  = document.getElementById('cAddress').value.trim();
+
+  if (!name) { showToast('Customer name is required.', 'warning'); return; }
+
+  google.script.run
+    .withSuccessHandler(res => {
+      if (res.success) {
+        showToast(res.message, 'success');
+        // Clear form and close
+        ['cName','cLocation','cAddress'].forEach(id => document.getElementById(id).value = '');
+        toggleAddForm();
+        loadCustomers();
+      } else {
+        showToast(res.error || 'Failed to add customer.', 'danger');
+      }
+    })
+    .withFailureHandler(err => showToast('Error: ' + err.message, 'danger'))
+    .addCustomer(name, date, location, address, adminPass);
+}
+</script>
+</body>
+</html>
