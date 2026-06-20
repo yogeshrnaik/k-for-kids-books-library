@@ -335,6 +335,11 @@
   <button class="filter-btn" data-filter="language" data-value="marathi" onclick="setFilter('language','marathi',this)">Marathi</button>
   <button class="filter-btn" data-filter="language" data-value="english" onclick="setFilter('language','english',this)">English</button>
 
+  <span class="filter-label ms-3">Other:</span>
+  <button class="filter-btn" data-filter="withImage" data-value="yes" onclick="toggleImageFilter(this)">
+    <i class="bi bi-image me-1"></i>Has image
+  </button>
+
   <span class="filter-label ms-3">Status:</span>
   <button class="filter-btn active" data-filter="status" data-value="" onclick="setFilter('status','',this)">All</button>
   <button class="filter-btn" data-filter="status" data-value="available" onclick="setFilter('status','available',this)">
@@ -556,7 +561,7 @@ let activeBook   = null;
 let adminMode    = false;
 let adminPass    = '';
 let searchTimer  = null;
-let filters      = { language: '', status: '', search: '' };
+let filters      = { language: '', status: '', search: '', withImage: false };
 
 const bookModal    = new bootstrap.Modal('#bookModal');
 const reserveModal = new bootstrap.Modal('#reserveModal');
@@ -606,6 +611,7 @@ function applyFilters() {
   filtered = allBooks.filter(b => {
     if (lg && b.language.toLowerCase() !== lg) return false;
     if (st && b.status.toLowerCase()   !== st) return false;
+    if (filters.withImage && !b.imageUrl)       return false;
     if (q && !b.bookName.toLowerCase().includes(q) &&
              !b.author.toLowerCase().includes(q)   &&
              !b.bookNo.toLowerCase().includes(q))   return false;
@@ -638,11 +644,18 @@ function clearSearch() {
   applyFilters();
 }
 
+function toggleImageFilter(el) {
+  filters.withImage = !filters.withImage;
+  el.classList.toggle('active', filters.withImage);
+  applyFilters();
+}
+
 function resetFilters() {
-  filters = { language: '', status: '', search: '' };
+  filters = { language: '', status: '', search: '', withImage: false };
   document.querySelectorAll('.filter-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.value === '');
   });
+  document.querySelector('[data-filter="withImage"]').classList.remove('active');
   applyFilters();
 }
 
@@ -737,14 +750,18 @@ function openBookDetail(bookNo) {
 
   let reservationInfo = '';
   if (book.status === 'Reserved') {
-    reservationInfo = `
-      <div class="alert alert-warning py-2 px-3 mt-2 mb-0" style="font-size:.82rem">
-        <i class="bi bi-bookmark-fill me-1"></i>
-        Reserved by <b>${escHtml(book.reservedBy)}</b>
-        ${book.pickupDate ? ' · Pickup: <b>' + escHtml(book.pickupDate) + '</b>' : ''}
-        ${adminMode && book.phone ? '<br>📞 ' + escHtml(book.phone) : ''}
-        ${book.notes ? '<br><i>' + escHtml(book.notes) + '</i>' : ''}
-      </div>`;
+    reservationInfo = adminMode
+      ? `<div class="alert alert-warning py-2 px-3 mt-2 mb-0" style="font-size:.82rem">
+           <i class="bi bi-bookmark-fill me-1"></i>
+           Reserved by <b>${escHtml(book.reservedBy)}</b>
+           ${book.pickupDate ? ' · Pickup: <b>' + escHtml(book.pickupDate) + '</b>' : ''}
+           ${book.phone ? '<br>📞 ' + escHtml(book.phone) : ''}
+           ${book.notes ? '<br><i>' + escHtml(book.notes) + '</i>' : ''}
+         </div>`
+      : `<div class="alert alert-warning py-2 px-3 mt-2 mb-0" style="font-size:.82rem">
+           <i class="bi bi-bookmark-fill me-1"></i>
+           This book is currently reserved.
+         </div>`;
   } else if (book.status === 'Issued') {
     reservationInfo = adminMode
       ? `<div class="alert alert-danger py-2 px-3 mt-2 mb-0" style="font-size:.82rem">
@@ -843,7 +860,8 @@ function submitReservation() {
       reserveModal.hide();
       if (res.success) {
         showToast(res.message, 'success');
-        refreshBook(activeBook.bookNo, 'Reserved', name, phone, date, notes);
+        // Never store subscriber name in local state for non-admin sessions
+        refreshBook(activeBook.bookNo, 'Reserved', adminMode ? name : '', adminMode ? phone : '', date, adminMode ? notes : '');
       } else {
         showToast(res.error || 'Reservation failed.', 'danger');
       }
