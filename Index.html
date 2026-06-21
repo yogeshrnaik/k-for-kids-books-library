@@ -208,8 +208,59 @@
     padding: 60px 20px;
     color: #999;
   }
-  .loading-state .spinner-border { color: var(--brand); width: 2.5rem; height: 2.5rem; }
   .empty-state i { font-size: 3rem; }
+
+  /* ── Fancy loading screen ── */
+  .fancy-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 60px 24px 40px;
+    min-height: 55vh;
+  }
+  .book-stack {
+    position: relative;
+    width: 72px;
+    height: 72px;
+    margin-bottom: 28px;
+  }
+  .book-stack .book {
+    position: absolute;
+    width: 52px;
+    height: 12px;
+    border-radius: 3px;
+    left: 10px;
+    animation: bookBounce 1.4s ease-in-out infinite;
+  }
+  .book-stack .b1 { background: var(--brand);    bottom: 0px;  animation-delay: 0s; }
+  .book-stack .b2 { background: #ff7043;          bottom: 16px; animation-delay: .15s; }
+  .book-stack .b3 { background: #43a047;          bottom: 32px; animation-delay: .3s; }
+  .book-stack .b4 { background: #8e24aa;          bottom: 48px; animation-delay: .45s; }
+  @keyframes bookBounce {
+    0%, 60%, 100% { transform: translateX(0);  }
+    30%           { transform: translateX(8px); }
+  }
+  .loading-progress-wrap {
+    width: min(320px, 80vw);
+    margin-bottom: 14px;
+  }
+  .loading-progress-track {
+    background: #eee;
+    border-radius: 99px;
+    height: 7px;
+    overflow: hidden;
+  }
+  .loading-progress-bar {
+    height: 100%;
+    border-radius: 99px;
+    background: linear-gradient(90deg, var(--brand), #ff7043);
+    width: 0%;
+    transition: width .4s ease;
+  }
+  .loading-pct  { font-size: .78rem; color: #aaa; margin-top: 6px; text-align: right; }
+  .loading-msg  { font-size: .92rem; color: #777; margin-bottom: 6px; min-height: 1.4em; text-align: center; transition: opacity .4s; }
+  .loading-sub  { font-size: .78rem; color: #bbb; font-style: italic; text-align: center; max-width: 280px; min-height: 2.4em; transition: opacity .4s; }
 
   /* ── Toast ── */
   .toast-container { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 9999; }
@@ -363,9 +414,21 @@
 
 <!-- ══════════════ MAIN CONTENT ══════════════ -->
 <main>
-  <div class="loading-state" id="loadingState">
-    <div class="spinner-border mb-3"></div>
-    <div>Loading books…</div>
+  <div class="loading-state fancy-loading" id="loadingState">
+    <div class="book-stack">
+      <div class="book b1"></div>
+      <div class="book b2"></div>
+      <div class="book b3"></div>
+      <div class="book b4"></div>
+    </div>
+    <div class="loading-msg"  id="loadingMsg">Fetching the collection…</div>
+    <div class="loading-progress-wrap">
+      <div class="loading-progress-track">
+        <div class="loading-progress-bar" id="loadingBar"></div>
+      </div>
+      <div class="loading-pct" id="loadingPct">0%</div>
+    </div>
+    <div class="loading-sub" id="loadingQuote"></div>
   </div>
 
   <div class="empty-state" id="emptyState" style="display:none">
@@ -597,6 +660,7 @@ function onBooksLoaded(result) {
   showLoading(false);
   if (!result.success) { showToast(result.error || 'Failed to load books.', 'danger'); return; }
   allBooks = result.books || [];
+  allBooks.sort((a, b) => (b.imageUrl ? 1 : 0) - (a.imageUrl ? 1 : 0));
   applyFilters();
 }
 
@@ -1008,9 +1072,57 @@ function statusClass(status) {
   return { 'Available': 'available', 'Reserved': 'reserved', 'Issued': 'issued' }[status] || 'available';
 }
 
+// ── Loading screen animation ──────────────────────
+const LOADING_MESSAGES = [
+  { pct: 0,  msg: 'Fetching the collection…',      quote: '"A reader lives a thousand lives before he dies." — George R.R. Martin' },
+  { pct: 15, msg: 'Scanning the shelves…',          quote: '"Not all those who wander are lost." — J.R.R. Tolkien' },
+  { pct: 30, msg: 'Sorting through the books…',     quote: '"So many books, so little time." — Frank Zappa' },
+  { pct: 48, msg: 'Matching covers to titles…',     quote: '"A book is a dream that you hold in your hands." — Neil Gaiman' },
+  { pct: 62, msg: 'Almost there…',                  quote: '"There is no friend as loyal as a book." — Ernest Hemingway' },
+  { pct: 78, msg: 'Putting everything in order…',   quote: '"One must always be careful of books." — Cassandra Clare' },
+  { pct: 90, msg: 'Just a moment more…',            quote: '"Books are a uniquely portable magic." — Stephen King' },
+];
+
+let _loadingTimer = null;
+let _loadingPct   = 0;
+
 function showLoading(show) {
-  document.getElementById('loadingState').style.display = show ? '' : 'none';
-  document.getElementById('booksGrid').style.display    = show ? 'none' : '';
+  const el   = document.getElementById('loadingState');
+  const grid = document.getElementById('booksGrid');
+  el.style.display   = show ? '' : 'none';
+  grid.style.display = show ? 'none' : '';
+
+  if (show) {
+    _loadingPct = 0;
+    _setLoadingPct(0);
+    _loadingTimer = setInterval(() => {
+      // Ease toward 93% — never reaches 100 until data arrives
+      const remaining = 93 - _loadingPct;
+      const step      = Math.max(0.4, remaining * 0.045);
+      _loadingPct     = Math.min(93, _loadingPct + step);
+      _setLoadingPct(_loadingPct);
+    }, 400);
+  } else {
+    clearInterval(_loadingTimer);
+    _setLoadingPct(100);
+  }
+}
+
+function _setLoadingPct(pct) {
+  const bar   = document.getElementById('loadingBar');
+  const pctEl = document.getElementById('loadingPct');
+  const msgEl = document.getElementById('loadingMsg');
+  const quoteEl = document.getElementById('loadingQuote');
+  if (!bar) return;
+
+  bar.style.width    = pct + '%';
+  pctEl.textContent  = Math.round(pct) + '%';
+
+  // Pick the message/quote for current pct
+  let entry = LOADING_MESSAGES[0];
+  for (const m of LOADING_MESSAGES) { if (pct >= m.pct) entry = m; }
+  if (msgEl.textContent   !== entry.msg)   msgEl.textContent   = entry.msg;
+  if (quoteEl.textContent !== entry.quote) quoteEl.textContent = entry.quote;
 }
 
 function showToast(msg, type) {

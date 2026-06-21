@@ -577,9 +577,56 @@ function setupImageNames() {
 // Public API (called via google.script.run)
 // ─────────────────────────────────────────────
 
+// ── Public books cache (chunked, 5-min TTL) ───────────────────────────────────
+const BOOKS_CACHE_KEY   = 'PUBLIC_BOOKS_V2';
+const BOOKS_CACHE_SECS  = 300; // 5 minutes
+const CHUNK_SIZE        = 90000; // bytes per CacheService entry (limit 100 KB)
+
+function getCachedPublicBooks_() {
+  const cache  = CacheService.getScriptCache();
+  const meta   = cache.get(BOOKS_CACHE_KEY + '_META');
+  if (!meta) return null;
+  const chunks = parseInt(meta, 10);
+  let json = '';
+  for (let i = 0; i < chunks; i++) {
+    const part = cache.get(BOOKS_CACHE_KEY + '_' + i);
+    if (!part) return null;
+    json += part;
+  }
+  try { return JSON.parse(json); } catch(e) { return null; }
+}
+
+function setCachedPublicBooks_(books) {
+  const cache = CacheService.getScriptCache();
+  const json  = JSON.stringify(books);
+  const total = Math.ceil(json.length / CHUNK_SIZE);
+  const pairs = { [BOOKS_CACHE_KEY + '_META']: String(total) };
+  for (let i = 0; i < total; i++) {
+    pairs[BOOKS_CACHE_KEY + '_' + i] = json.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+  }
+  cache.putAll(pairs, BOOKS_CACHE_SECS);
+}
+
+function invalidatePublicBooksCache_() {
+  const cache = CacheService.getScriptCache();
+  const meta  = cache.get(BOOKS_CACHE_KEY + '_META');
+  if (!meta) return;
+  const chunks = parseInt(meta, 10);
+  const keys   = [BOOKS_CACHE_KEY + '_META'];
+  for (let i = 0; i < chunks; i++) keys.push(BOOKS_CACHE_KEY + '_' + i);
+  cache.removeAll(keys);
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 function getBooks(filters, adminPassword) {
   try {
     const isAdmin = adminPassword ? verifyAdmin_(adminPassword) : false;
+
+    // Serve public books from cache when possible (admin always bypasses cache)
+    if (!isAdmin && !filters) {
+      const cached = getCachedPublicBooks_();
+      if (cached) return { success: true, books: cached };
+    }
 
     const { sheet, headerRow } = getSheetAndHeader_();
     const data     = sheet.getDataRange().getValues();
@@ -633,6 +680,11 @@ function getBooks(filters, adminPassword) {
       });
     }
 
+    // Cache public result for future visitors
+    if (!isAdmin && !filters) {
+      try { setCachedPublicBooks_(books); } catch(e) { /* non-fatal */ }
+    }
+
     return { success: true, books };
   } catch (err) {
     return { success: false, error: err.message };
@@ -662,6 +714,7 @@ function reserveBook(bookNo, subscriberName, phone, pickupDate, notes) {
       sheet.getRange(r, C.PICKUP_DATE + 1).setValue((pickupDate || '').trim());
       sheet.getRange(r, C.NOTES       + 1).setValue((notes      || '').trim());
 
+      invalidatePublicBooksCache_();
       return { success: true, message: '✅ Book reserved! We will contact you when it\'s ready.' };
     }
     return { success: false, error: 'Book not found.' };
@@ -694,6 +747,7 @@ function issueBook(bookNo, subscriberName, issueDate, adminPassword) {
       // Log to customer's named tab
       logIssueToCustTab_(subscriberName.trim(), bookNo.trim(), bookName, date);
 
+      invalidatePublicBooksCache_();
       return { success: true, message: '✅ Book marked as issued to ' + subscriberName.trim() };
     }
     return { success: false, error: 'Book not found.' };
@@ -728,6 +782,7 @@ function returnBook(bookNo, adminPassword) {
         logReturnToCustTab_(issuedTo, bookNo.trim(), new Date());
       }
 
+      invalidatePublicBooksCache_();
       return { success: true, message: '✅ Book marked as returned and available.' };
     }
     return { success: false, error: 'Book not found.' };
@@ -753,6 +808,7 @@ function cancelReservation(bookNo, adminPassword) {
       sheet.getRange(r, C.PICKUP_DATE + 1).setValue('');
       sheet.getRange(r, C.NOTES       + 1).setValue('');
 
+      invalidatePublicBooksCache_();
       return { success: true, message: '✅ Reservation cancelled.' };
     }
     return { success: false, error: 'Book not found.' };
