@@ -9,6 +9,7 @@ Usage:
     python3 download_book_covers.py --min-size 200x250  # quality threshold (WxH px)
 
 Images saved to ./book-images/ as "{BookNo} - {Title}.jpg"
+Existing good-quality images are skipped by book number unless --redownload is used.
 Low-quality images (below --min-size) are rejected on download AND
 any existing low-quality files in book-images/ are deleted at startup.
 """
@@ -26,6 +27,7 @@ from PIL import Image
 
 SAVE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "book-images")
 os.makedirs(SAVE_DIR, exist_ok=True)
+IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif")
 
 # Pass --redownload to overwrite any existing files
 REDOWNLOAD = "--redownload" in sys.argv
@@ -421,6 +423,10 @@ def sanitize(name):
     return re.sub(r'[<>:"/\\|?*]', '', name).strip()
 
 
+def is_image_file(filename):
+    return filename.lower().endswith(IMAGE_EXTENSIONS)
+
+
 def fetch_with_retry(url, timeout=20, retries=3):
     """Fetch a URL with retry + exponential backoff on 429 / timeouts."""
     headers = {"User-Agent": "KidsBookLibrary/1.0 (personal use)"}
@@ -511,6 +517,23 @@ def is_good_quality_file(filepath):
         return False
 
 
+def find_existing_good_quality_file(book_no, expected_filepath):
+    """Return an already-downloaded good cover for this book number, if present."""
+    if os.path.exists(expected_filepath) and is_good_quality_file(expected_filepath):
+        return expected_filepath
+
+    book_prefix = f"{book_no} - ".lower()
+    for fname in os.listdir(SAVE_DIR):
+        if not is_image_file(fname) or not fname.lower().startswith(book_prefix):
+            continue
+
+        fpath = os.path.join(SAVE_DIR, fname)
+        if is_good_quality_file(fpath):
+            return fpath
+
+    return None
+
+
 def download_image(url, filepath):
     """Download image, check quality, save if good. Returns True on success."""
     data = fetch_with_retry(url, timeout=20)
@@ -530,7 +553,7 @@ def purge_low_quality(directory):
     """Delete any existing image files below the quality threshold."""
     removed = []
     for fname in os.listdir(directory):
-        if not fname.lower().endswith((".jpg", ".jpeg", ".png", ".gif")):
+        if not is_image_file(fname):
             continue
         fpath = os.path.join(directory, fname)
         if not is_good_quality_file(fpath):
@@ -549,7 +572,7 @@ def process_book(args):
     filename = sanitize(f"{book_no} - {display_title}") + ".jpg"
     filepath = os.path.join(SAVE_DIR, filename)
 
-    if not REDOWNLOAD and os.path.exists(filepath) and is_good_quality_file(filepath):
+    if not REDOWNLOAD and find_existing_good_quality_file(book_no, filepath):
         return ("skipped", book_no, display_title, "")
 
     with _print_lock:
