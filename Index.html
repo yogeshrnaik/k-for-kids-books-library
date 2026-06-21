@@ -622,7 +622,7 @@ let allBooks     = [];
 let filtered     = [];
 let activeBook   = null;
 let adminMode    = false;
-let adminPass    = '';
+let adminToken   = '';
 let searchTimer  = null;
 let filters      = { language: '', status: '', search: '', withImage: false };
 
@@ -640,6 +640,16 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('iDate').value = today;
   loadBooks();
 
+  document.getElementById('booksGrid').addEventListener('click', event => {
+    const card = event.target.closest('.book-card');
+    if (card) openBookDetail(card.dataset.bookNo);
+  });
+
+  document.getElementById('custTableBody').addEventListener('click', event => {
+    const btn = event.target.closest('.update-status-btn');
+    if (btn) doUpdateStatus(btn.dataset.customerName, Number(btn.dataset.customerIdx));
+  });
+
   // Infinite scroll: load more books when sentinel comes into view
   const sentinel = document.getElementById('scrollSentinel');
   const observer = new IntersectionObserver(entries => {
@@ -653,7 +663,7 @@ function loadBooks() {
   google.script.run
     .withSuccessHandler(onBooksLoaded)
     .withFailureHandler(onError)
-    .getBooks(null, adminPass);
+    .getBooks(null, adminToken);
 }
 
 function onBooksLoaded(result) {
@@ -732,7 +742,7 @@ let renderOffset = 0;
 function bookCardHtml(book) {
   const sc  = statusClass(book.status);
   const imgHtml = book.imageUrl
-    ? `<img src="${book.imageUrl}" alt="${escHtml(book.bookName)}" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">`
+    ? `<img src="${escAttr(book.imageUrl)}" alt="${escAttr(book.bookName)}" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">`
     : '';
   const placeholder = `<div class="book-img-placeholder" ${book.imageUrl ? 'style="display:none"' : ''}>
       <i class="bi bi-book"></i><small>${escHtml(book.bookNo)}</small></div>`;
@@ -743,10 +753,10 @@ function bookCardHtml(book) {
       </div>`
     : '';
   return `<div class="book-card ${book.status !== 'Available' ? 'unavailable' : ''}"
-                onclick="openBookDetail('${escHtml(book.bookNo)}')">
+                data-book-no="${escAttr(book.bookNo)}">
     <div class="book-img-wrap">
       ${imgHtml}${placeholder}
-      <span class="status-badge badge-${sc}">${book.status}</span>
+      <span class="status-badge badge-${sc}">${escHtml(book.status)}</span>
     </div>
     <div class="book-info">
       <div class="book-title">${escHtml(book.bookName)}</div>
@@ -806,11 +816,11 @@ function openBookDetail(bookNo) {
   document.getElementById('modalTitle').textContent = book.bookNo;
 
   const imgPart = book.imageUrl
-    ? `<img src="${book.imageUrl}" class="detail-img" alt="" onerror="this.outerHTML='<div class=\'detail-img-placeholder\'><i class=\'bi bi-book\'></i></div>'">`
+    ? `<img src="${escAttr(book.imageUrl)}" class="detail-img" alt="" onerror="this.outerHTML='<div class=\'detail-img-placeholder\'><i class=\'bi bi-book\'></i></div>'">`
     : `<div class="detail-img-placeholder"><i class="bi bi-book"></i></div>`;
 
   const sc    = statusClass(book.status);
-  const pill  = `<span class="status-pill pill-${sc}">${book.status}</span>`;
+  const pill  = `<span class="status-pill pill-${sc}">${escHtml(book.status)}</span>`;
 
   let reservationInfo = '';
   if (book.status === 'Reserved') {
@@ -878,12 +888,12 @@ function buildAdminSection(book) {
     </button>`);
   }
   if (book.status === 'Reserved') {
-    actions.push(`<button class="btn btn-sm btn-outline-danger" onclick="doAdminAction('cancelReservation','${escHtml(book.bookNo)}')">
+    actions.push(`<button class="btn btn-sm btn-outline-danger" onclick="doAdminAction('cancelReservation')">
       <i class="bi bi-x-circle me-1"></i>Cancel Reservation
     </button>`);
   }
   if (book.status === 'Issued') {
-    actions.push(`<button class="btn btn-sm btn-outline-success" onclick="doAdminAction('returnBook','${escHtml(book.bookNo)}')">
+    actions.push(`<button class="btn btn-sm btn-outline-success" onclick="doAdminAction('returnBook')">
       <i class="bi bi-arrow-return-left me-1"></i>Mark as Returned
     </button>`);
   }
@@ -932,7 +942,7 @@ function submitReservation() {
     })
     .withFailureHandler(err => {
       setButtonLoading('reserveModal', false);
-      showToast('Error: ' + err.message, 'danger');
+      showToast('Something went wrong. Please try again.', 'danger');
     })
     .reserveBook(activeBook.bookNo, name, phone, date, notes);
 }
@@ -971,15 +981,17 @@ function submitIssue() {
     })
     .withFailureHandler(err => {
       setButtonLoading('issueModal', false);
-      showToast('Error: ' + err.message, 'danger');
+      showToast('Something went wrong. Please try again.', 'danger');
     })
-    .issueBook(activeBook.bookNo, subscriber, date, adminPass);
+    .issueBook(activeBook.bookNo, subscriber, date, adminToken);
 }
 
 // ════════════════════════════════════════════════
 // Admin: cancel / return
 // ════════════════════════════════════════════════
 function doAdminAction(action, bookNo) {
+  bookNo = bookNo || (activeBook && activeBook.bookNo);
+  if (!bookNo) return;
   const labels = { cancelReservation: 'Cancel reservation', returnBook: 'Mark as returned' };
   if (!confirm(labels[action] + '?')) return;
 
@@ -995,8 +1007,8 @@ function doAdminAction(action, bookNo) {
         showToast(res.error || 'Failed.', 'danger');
       }
     })
-    .withFailureHandler(err => showToast('Error: ' + err.message, 'danger'))
-    [action](bookNo, adminPass);
+    .withFailureHandler(err => showToast('Something went wrong. Please try again.', 'danger'))
+    [action](bookNo, adminToken);
 }
 
 // ════════════════════════════════════════════════
@@ -1012,26 +1024,27 @@ function loginAdmin() {
   if (!pwd) return;
 
   google.script.run
-    .withSuccessHandler(ok => {
-      if (ok) {
+    .withSuccessHandler(res => {
+      if (res && res.success && res.token) {
         adminMode = true;
-        adminPass = pwd;
+        adminToken = res.token;
         document.getElementById('adminModeBadge').style.display = '';
         document.getElementById('adminPasswordInput').value     = '';
         document.getElementById('adminTabBar').style.display    = '';
         showToast('Admin mode active.', 'success');
         loadBooks(); // reload with admin-only fields
       } else {
-        showToast('Incorrect password.', 'danger');
+        showToast((res && res.error) || 'Incorrect password.', 'danger');
       }
     })
-    .withFailureHandler(err => showToast('Error: ' + err.message, 'danger'))
-    .verifyAdminPassword(pwd);
+    .withFailureHandler(err => showToast('Something went wrong. Please try again.', 'danger'))
+    .loginAdmin(pwd);
 }
 
 function logoutAdmin() {
+  const token = adminToken;
   adminMode      = false;
-  adminPass      = '';
+  adminToken     = '';
   allCustomers   = [];
   activeAdminTab = 'books';
   document.getElementById('adminModeBadge').style.display  = 'none';
@@ -1043,6 +1056,11 @@ function logoutAdmin() {
   document.querySelector('main').style.display             = '';
   showToast('Logged out of admin mode.', 'secondary');
   loadBooks(); // reload without admin-only fields
+  if (token) {
+    google.script.run
+      .withFailureHandler(() => {})
+      .logoutAdminSession(token);
+  }
 }
 
 // ════════════════════════════════════════════════
@@ -1135,7 +1153,7 @@ function showToast(msg, type) {
 
 function onError(err) {
   showLoading(false);
-  showToast('Error: ' + (err.message || err), 'danger');
+  showToast('Something went wrong. Please try again.', 'danger');
 }
 
 function setButtonLoading(modalId, loading) {
@@ -1150,6 +1168,10 @@ function setButtonLoading(modalId, loading) {
 
 function escHtml(str) {
   return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function escAttr(str) {
+  return escHtml(str).replace(/'/g,'&#39;');
 }
 
 // ════════════════════════════════════════════════
@@ -1194,9 +1216,9 @@ function loadCustomers() {
     })
     .withFailureHandler(err => {
       document.getElementById('custLoadingState').style.display = 'none';
-      showToast('Error: ' + err.message, 'danger');
+      showToast('Something went wrong. Please try again.', 'danger');
     })
-    .getCustomers(adminPass);
+    .getCustomers(adminToken);
 }
 
 function filterCustomers() {
@@ -1237,7 +1259,8 @@ function renderCustomers(list) {
             <option ${c.status==='Inactive' ? 'selected' : ''}>Inactive</option>
             <option ${c.status==='Closed'   ? 'selected' : ''}>Closed</option>
           </select>
-          <button class="btn btn-sm btn-outline-warning" onclick="doUpdateStatus('${escHtml(c.name)}', ${idx})">
+          <button class="btn btn-sm btn-outline-warning update-status-btn"
+                  data-customer-name="${escAttr(c.name)}" data-customer-idx="${idx}">
             <i class="bi bi-check2"></i>
           </button>
         </div>
@@ -1257,8 +1280,8 @@ function doUpdateStatus(customerName, idx) {
         showToast(res.error || 'Update failed.', 'danger');
       }
     })
-    .withFailureHandler(err => showToast('Error: ' + err.message, 'danger'))
-    .updateCustomerStatus(customerName, newStatus, adminPass);
+    .withFailureHandler(err => showToast('Something went wrong. Please try again.', 'danger'))
+    .updateCustomerStatus(customerName, newStatus, adminToken);
 }
 
 function toggleAddForm() {
@@ -1293,8 +1316,8 @@ function submitAddCustomer() {
         showToast(res.error || 'Failed to add customer.', 'danger');
       }
     })
-    .withFailureHandler(err => showToast('Error: ' + err.message, 'danger'))
-    .addCustomer(name, date, location, address, adminPass);
+    .withFailureHandler(err => showToast('Something went wrong. Please try again.', 'danger'))
+    .addCustomer(name, date, location, address, adminToken);
 }
 </script>
 </body>

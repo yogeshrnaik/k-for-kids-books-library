@@ -513,8 +513,7 @@ const IMAGE_MAP = {
 function doGet(e) {
   return HtmlService.createHtmlOutputFromFile('Index')
     .setTitle('K for Kids Books Library')
-    .addMetaTag('viewport', 'width=device-width, initial-scale=1')
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 
 // ─────────────────────────────────────────────
@@ -581,6 +580,7 @@ function setupImageNames() {
 const BOOKS_CACHE_KEY   = 'PUBLIC_BOOKS_V2';
 const BOOKS_CACHE_SECS  = 300; // 5 minutes
 const CHUNK_SIZE        = 90000; // bytes per CacheService entry (limit 100 KB)
+const ADMIN_SESSION_SECS = 7200; // 2 hours
 
 function getCachedPublicBooks_() {
   const cache  = CacheService.getScriptCache();
@@ -618,9 +618,9 @@ function invalidatePublicBooksCache_() {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
-function getBooks(filters, adminPassword) {
+function getBooks(filters, adminCredential) {
   try {
-    const isAdmin = adminPassword ? verifyAdmin_(adminPassword) : false;
+    const isAdmin = adminCredential ? verifyAdminCredential_(adminCredential) : false;
 
     // Serve public books from cache when possible (admin always bypasses cache)
     if (!isAdmin && !filters) {
@@ -687,13 +687,25 @@ function getBooks(filters, adminPassword) {
 
     return { success: true, books };
   } catch (err) {
-    return { success: false, error: err.message };
+    return reportError_('getBooks', err);
   }
 }
 
 function reserveBook(bookNo, subscriberName, phone, pickupDate, notes) {
   try {
+    if (!checkRateLimit_('reserve-book', 5, 300)) {
+      return { success: false, error: 'Too many reservation attempts. Please try again later.' };
+    }
     if (!bookNo || !subscriberName) return { success: false, error: 'Book number and your name are required.' };
+
+    subscriberName = trim_(subscriberName);
+    phone          = trim_(phone);
+    pickupDate     = trim_(pickupDate);
+    notes          = trim_(notes);
+
+    if (subscriberName.length > 100) return { success: false, error: 'Name is too long.' };
+    if (phone.length > 40)           return { success: false, error: 'Phone number is too long.' };
+    if (notes.length > 500)          return { success: false, error: 'Notes are too long.' };
 
     const { sheet, headerRow } = getSheetAndHeader_();
     const data = sheet.getDataRange().getValues();
@@ -709,23 +721,23 @@ function reserveBook(bookNo, subscriberName, phone, pickupDate, notes) {
 
       const r = i + 1;
       sheet.getRange(r, C.STATUS      + 1).setValue('Reserved');
-      sheet.getRange(r, C.RESERVED_BY + 1).setValue(subscriberName.trim());
-      sheet.getRange(r, C.PHONE       + 1).setValue((phone      || '').trim());
-      sheet.getRange(r, C.PICKUP_DATE + 1).setValue((pickupDate || '').trim());
-      sheet.getRange(r, C.NOTES       + 1).setValue((notes      || '').trim());
+      sheet.getRange(r, C.RESERVED_BY + 1).setValue(subscriberName);
+      sheet.getRange(r, C.PHONE       + 1).setValue(phone);
+      sheet.getRange(r, C.PICKUP_DATE + 1).setValue(pickupDate);
+      sheet.getRange(r, C.NOTES       + 1).setValue(notes);
 
       invalidatePublicBooksCache_();
       return { success: true, message: '✅ Book reserved! We will contact you when it\'s ready.' };
     }
     return { success: false, error: 'Book not found.' };
   } catch (err) {
-    return { success: false, error: err.message };
+    return reportError_('reserveBook', err);
   }
 }
 
-function issueBook(bookNo, subscriberName, issueDate, adminPassword) {
+function issueBook(bookNo, subscriberName, issueDate, adminCredential) {
   try {
-    if (!verifyAdmin_(adminPassword)) return { success: false, error: 'Incorrect admin password.' };
+    if (!verifyAdminCredential_(adminCredential)) return { success: false, error: 'Admin session expired. Please log in again.' };
     if (!bookNo || !subscriberName)   return { success: false, error: 'Book number and subscriber name required.' };
 
     const { sheet, headerRow } = getSheetAndHeader_();
@@ -752,13 +764,13 @@ function issueBook(bookNo, subscriberName, issueDate, adminPassword) {
     }
     return { success: false, error: 'Book not found.' };
   } catch (err) {
-    return { success: false, error: err.message };
+    return reportError_('issueBook', err);
   }
 }
 
-function returnBook(bookNo, adminPassword) {
+function returnBook(bookNo, adminCredential) {
   try {
-    if (!verifyAdmin_(adminPassword)) return { success: false, error: 'Incorrect admin password.' };
+    if (!verifyAdminCredential_(adminCredential)) return { success: false, error: 'Admin session expired. Please log in again.' };
 
     const { sheet, headerRow } = getSheetAndHeader_();
     const data = sheet.getDataRange().getValues();
@@ -787,13 +799,13 @@ function returnBook(bookNo, adminPassword) {
     }
     return { success: false, error: 'Book not found.' };
   } catch (err) {
-    return { success: false, error: err.message };
+    return reportError_('returnBook', err);
   }
 }
 
-function cancelReservation(bookNo, adminPassword) {
+function cancelReservation(bookNo, adminCredential) {
   try {
-    if (!verifyAdmin_(adminPassword)) return { success: false, error: 'Incorrect admin password.' };
+    if (!verifyAdminCredential_(adminCredential)) return { success: false, error: 'Admin session expired. Please log in again.' };
 
     const { sheet, headerRow } = getSheetAndHeader_();
     const data = sheet.getDataRange().getValues();
@@ -813,7 +825,7 @@ function cancelReservation(bookNo, adminPassword) {
     }
     return { success: false, error: 'Book not found.' };
   } catch (err) {
-    return { success: false, error: err.message };
+    return reportError_('cancelReservation', err);
   }
 }
 
@@ -821,9 +833,9 @@ function cancelReservation(bookNo, adminPassword) {
 // Customer Management (Admin only)
 // ─────────────────────────────────────────────
 
-function getCustomers(adminPassword) {
+function getCustomers(adminCredential) {
   try {
-    if (!verifyAdmin_(adminPassword)) return { success: false, error: 'Incorrect admin password.' };
+    if (!verifyAdminCredential_(adminCredential)) return { success: false, error: 'Admin session expired. Please log in again.' };
     const ss    = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
     const sheet = ss.getSheetByName(CONFIG.CUSTOMER_SHEET_NAME);
     if (!sheet) return { success: false, error: 'Customer DB sheet not found.' };
@@ -856,13 +868,13 @@ function getCustomers(adminPassword) {
     }
     return { success: true, customers };
   } catch (err) {
-    return { success: false, error: err.message };
+    return reportError_('getCustomers', err);
   }
 }
 
-function addCustomer(name, dateStart, location, address, adminPassword) {
+function addCustomer(name, dateStart, location, address, adminCredential) {
   try {
-    if (!verifyAdmin_(adminPassword)) return { success: false, error: 'Incorrect admin password.' };
+    if (!verifyAdminCredential_(adminCredential)) return { success: false, error: 'Admin session expired. Please log in again.' };
     if (!name) return { success: false, error: 'Customer name is required.' };
 
     const ss    = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
@@ -894,13 +906,13 @@ function addCustomer(name, dateStart, location, address, adminPassword) {
     ]);
     return { success: true, message: '✅ Customer "' + name.trim() + '" added successfully.' };
   } catch (err) {
-    return { success: false, error: err.message };
+    return reportError_('addCustomer', err);
   }
 }
 
-function updateCustomerStatus(customerName, newStatus, adminPassword) {
+function updateCustomerStatus(customerName, newStatus, adminCredential) {
   try {
-    if (!verifyAdmin_(adminPassword)) return { success: false, error: 'Incorrect admin password.' };
+    if (!verifyAdminCredential_(adminCredential)) return { success: false, error: 'Admin session expired. Please log in again.' };
     if (!customerName || !newStatus)  return { success: false, error: 'Customer name and status required.' };
 
     const valid = ['Active', 'Inactive', 'Closed'];
@@ -927,7 +939,7 @@ function updateCustomerStatus(customerName, newStatus, adminPassword) {
     }
     return { success: false, error: 'Customer "' + customerName + '" not found.' };
   } catch (err) {
-    return { success: false, error: err.message };
+    return reportError_('updateCustomerStatus', err);
   }
 }
 
@@ -1005,11 +1017,37 @@ function logReturnToCustTab_(customerName, bookNo, returnDate) {
   }
 }
 
+function loginAdmin(password) {
+  try {
+    if (!checkRateLimit_('admin-login', 10, 300)) {
+      return { success: false, error: 'Too many login attempts. Please try again later.' };
+    }
+    if (!verifyAdmin_(password)) return { success: false, error: 'Incorrect admin password.' };
+
+    const token = Utilities.getUuid() + Utilities.getUuid();
+    CacheService.getScriptCache().put(adminSessionKey_(token), '1', ADMIN_SESSION_SECS);
+    return { success: true, token };
+  } catch (err) {
+    return reportError_('loginAdmin', err);
+  }
+}
+
+function logoutAdminSession(token) {
+  try {
+    if (token) CacheService.getScriptCache().remove(adminSessionKey_(token));
+  } catch (err) {
+    Logger.log('logoutAdminSession error: ' + err.message);
+  }
+  return { success: true };
+}
+
 function verifyAdminPassword(password) {
+  if (!checkRateLimit_('admin-password-check', 10, 300)) return false;
   return verifyAdmin_(password);
 }
 
 function changeAdminPassword(currentPassword, newPassword) {
+  if (!checkRateLimit_('admin-password-change', 5, 300)) return { success: false, error: 'Too many attempts. Please try again later.' };
   if (!verifyAdmin_(currentPassword))     return { success: false, error: 'Current password incorrect.' };
   if (!newPassword || newPassword.length < 6) return { success: false, error: 'New password must be at least 6 characters.' };
   PropertiesService.getScriptProperties().setProperty('ADMIN_PASSWORD', newPassword);
@@ -1105,6 +1143,43 @@ function getImageMap_() {
 function verifyAdmin_(password) {
   const stored = PropertiesService.getScriptProperties().getProperty('ADMIN_PASSWORD');
   return Boolean(stored) && password === stored;
+}
+
+function verifyAdminCredential_(credential) {
+  if (!credential) return false;
+  const key = adminSessionKey_(credential);
+  const cache = CacheService.getScriptCache();
+  if (cache.get(key) !== '1') return false;
+
+  // Sliding expiry while the admin is actively using the app.
+  cache.put(key, '1', ADMIN_SESSION_SECS);
+  return true;
+}
+
+function adminSessionKey_(token) {
+  return 'ADMIN_SESSION_' + String(token || '').replace(/[^a-zA-Z0-9-]/g, '').slice(0, 100);
+}
+
+function checkRateLimit_(scope, maxAttempts, windowSeconds) {
+  const cache = CacheService.getScriptCache();
+  const key   = 'RATE_' + scope + '_' + callerKey_();
+  const count = parseInt(cache.get(key) || '0', 10);
+  if (count >= maxAttempts) return false;
+  cache.put(key, String(count + 1), windowSeconds);
+  return true;
+}
+
+function callerKey_() {
+  try {
+    return Session.getTemporaryActiveUserKey() || 'anonymous';
+  } catch (e) {
+    return 'anonymous';
+  }
+}
+
+function reportError_(context, err) {
+  Logger.log(context + ' error: ' + (err && err.message ? err.message : err));
+  return { success: false, error: 'Something went wrong. Please try again.' };
 }
 
 function trim_(val) {
