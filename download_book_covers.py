@@ -14,6 +14,7 @@ any existing low-quality files in book-images/ are deleted at startup.
 """
 
 import os
+import io
 import json
 import urllib.request
 import urllib.parse
@@ -21,6 +22,7 @@ import time
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from PIL import Image
 
 SAVE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "book-images")
 os.makedirs(SAVE_DIR, exist_ok=True)
@@ -31,6 +33,10 @@ REDOWNLOAD = "--redownload" in sys.argv
 # Pass --workers N to set parallelism (default 5)
 _w = next((sys.argv[i + 1] for i, a in enumerate(sys.argv) if a == "--workers" and i + 1 < len(sys.argv)), "5")
 WORKERS = int(_w)
+
+# Pass --min-size WxH to set the minimum acceptable image dimensions (default 200x250)
+_ms = next((sys.argv[i + 1] for i, a in enumerate(sys.argv) if a == "--min-size" and i + 1 < len(sys.argv)), "200x250")
+MIN_W, MIN_H = (int(x) for x in _ms.split("x"))
 
 # (book_no, display_title, search_query, author_hint)
 # Franklin series: Marathi titles mapped to English originals for searching
@@ -480,17 +486,57 @@ def search_google_books(query):
     return None
 
 
-def download_image(url, filepath):
-    """Download binary image to filepath. Returns True if a real image was saved."""
-    data = fetch_with_retry(url, timeout=20)
-    if not data:
+def image_dimensions(data):
+    """Return (width, height) of image bytes, or (0, 0) on failure."""
+    try:
+        img = Image.open(io.BytesIO(data))
+        return img.size  # (width, height)
+    except Exception:
+        return (0, 0)
+
+
+def is_good_quality(data):
+    """Return True if the image meets the minimum size threshold."""
+    w, h = image_dimensions(data)
+    return w >= MIN_W and h >= MIN_H
+
+
+def is_good_quality_file(filepath):
+    """Return True if an existing file on disk meets the quality threshold."""
+    try:
+        with open(filepath, "rb") as f:
+            data = f.read()
+        return is_good_quality(data)
+    except Exception:
         return False
-    # Open Library 1x1 gif ≈ 807 bytes; Google placeholder ≈ small
-    if len(data) < 5000:
+
+
+def download_image(url, filepath):
+    """Download image, check quality, save if good. Returns True on success."""
+    data = fetch_with_retry(url, timeout=20)
+    if not data or len(data) < 2000:
+        return False
+    if not is_good_quality(data):
+        w, h = image_dimensions(data)
+        with _print_lock:
+            print(f"    ✗ Rejected: {w}×{h}px (min {MIN_W}×{MIN_H})", flush=True)
         return False
     with open(filepath, "wb") as f:
         f.write(data)
     return True
+
+
+def purge_low_quality(directory):
+    """Delete any existing image files below the quality threshold."""
+    removed = []
+    for fname in os.listdir(directory):
+        if not fname.lower().endswith((".jpg", ".jpeg", ".png", ".gif")):
+            continue
+        fpath = os.path.join(directory, fname)
+        if not is_good_quality_file(fpath):
+            os.remove(fpath)
+            removed.append(fname)
+    return removed
 
 
 # ── worker ──────────────────────────────────────────────────────────────────
@@ -503,7 +549,7 @@ def process_book(args):
     filename = sanitize(f"{book_no} - {display_title}") + ".jpg"
     filepath = os.path.join(SAVE_DIR, filename)
 
-    if not REDOWNLOAD and os.path.exists(filepath) and os.path.getsize(filepath) > 5000:
+    if not REDOWNLOAD and os.path.exists(filepath) and is_good_quality_file(filepath):
         return ("skipped", book_no, display_title, "")
 
     with _print_lock:
@@ -535,6 +581,19 @@ def process_book(args):
 
 # ── main ────────────────────────────────────────────────────────────────────
 print(f"Saving images to: {SAVE_DIR}")
+print(f"Quality threshold: {MIN_W}×{MIN_H}px  |  Workers: {WORKERS}\n", flush=True)
+
+# Step 1: purge existing low-quality images
+print("Scanning for low-quality existing images…", flush=True)
+removed = purge_low_quality(SAVE_DIR)
+if removed:
+    print(f"Removed {len(removed)} low-quality file(s):")
+    for f in sorted(removed):
+        print(f"  🗑  {f}")
+else:
+    print("  All existing images meet the quality threshold.")
+print(flush=True)
+
 print(f"Processing {len(BOOKS)} books with {WORKERS} parallel workers…\n", flush=True)
 
 total = len(BOOKS)
