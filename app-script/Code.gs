@@ -577,7 +577,7 @@ function setupImageNames() {
 // ─────────────────────────────────────────────
 
 // ── Public books cache (chunked, 5-min TTL) ───────────────────────────────────
-const BOOKS_CACHE_KEY   = 'PUBLIC_BOOKS_MASTER_HEADERS_IMAGES_V1';
+const BOOKS_CACHE_KEY   = 'PUBLIC_BOOKS_MASTER_HEADERS_IMAGES_DISPLAY_V1';
 const IMAGE_CACHE_KEY   = 'BOOK_IMAGE_MAP_MASTER_HEADERS_V2';
 const BOOKS_CACHE_SECS  = 300; // 5 minutes
 const CHUNK_SIZE        = 90000; // bytes per CacheService entry (limit 100 KB)
@@ -630,27 +630,30 @@ function getBooks(filters, adminCredential) {
     }
 
     const { sheet, headerRow, columns } = getSheetAndHeader_();
-    const data     = sheet.getDataRange().getValues();
+    const range    = sheet.getDataRange();
+    const data     = range.getValues();
+    const displayData = range.getDisplayValues();
     const imageMap = getImageMap_();
     const tz       = Session.getScriptTimeZone();
 
     const books = [];
     for (let i = headerRow + 1; i < data.length; i++) {
-      const row     = data[i];
-      const bookNo  = trim_(row[columns.BOOK_NO]);
+      const row        = data[i];
+      const displayRow = displayData[i];
+      const bookNo     = trim_(displayRow[columns.BOOK_NO]);
       if (!bookNo)  continue;
 
-      const language   = trim_(row[columns.LANGUAGE]);
-      const ageGroup   = trim_(row[columns.AGE_GROUP]);
-      const bookName   = trim_(row[columns.BOOK_NAME]);
-      const category   = trim_(row[columns.CATEGORY]);
-      const issuedTo   = trim_(row[columns.ISSUED_TO]);
-      const author     = trim_(row[columns.AUTHOR]);
-      const reservedBy = trim_(row[columns.RESERVED_BY]);
-      const phone      = trim_(row[columns.PHONE]);
-      const notes      = trim_(row[columns.NOTES]);
+      const language   = trim_(displayRow[columns.LANGUAGE]);
+      const ageGroup   = trim_(displayRow[columns.AGE_GROUP]);
+      const bookName   = trim_(displayRow[columns.BOOK_NAME]);
+      const category   = trim_(displayRow[columns.CATEGORY]);
+      const issuedTo   = trim_(displayRow[columns.ISSUED_TO]);
+      const author     = trim_(displayRow[columns.AUTHOR]);
+      const reservedBy = trim_(displayRow[columns.RESERVED_BY]);
+      const phone      = trim_(displayRow[columns.PHONE]);
+      const notes      = trim_(displayRow[columns.NOTES]);
 
-      let status = trim_(row[columns.STATUS]);
+      let status = trim_(displayRow[columns.STATUS]);
       if (!status) status = issuedTo ? 'Issued' : 'Available';
 
       const pickupDate = formatDate_(row[columns.PICKUP_DATE], tz);
@@ -669,7 +672,7 @@ function getBooks(filters, adminCredential) {
 
       books.push({
         rowIndex: i + 1,
-        srNo: row[columns.SR_NO],
+        srNo: displayRow[columns.SR_NO],
         language, bookNo, bookName, author, ageGroup, category,
         status,
         imageUrl:   imageMap[bookNo] || '',
@@ -1144,7 +1147,7 @@ function getImageMap_() {
 
   // Step 2: Read Image Name column from sheet
   const { sheet, headerRow, columns } = getSheetAndHeader_();
-  const data = sheet.getDataRange().getValues();
+  const data = sheet.getDataRange().getDisplayValues();
 
   const map = {};
   for (let i = headerRow + 1; i < data.length; i++) {

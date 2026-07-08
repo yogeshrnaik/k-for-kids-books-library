@@ -386,6 +386,11 @@
   <button class="filter-btn" data-filter="language" data-value="marathi" onclick="setFilter('language','marathi',this)">Marathi</button>
   <button class="filter-btn" data-filter="language" data-value="english" onclick="setFilter('language','english',this)">English</button>
 
+  <span class="filter-label ms-3">Age:</span>
+  <span id="ageGroupFilters">
+    <button class="filter-btn active" data-filter="ageGroup" data-value="" onclick="setFilter('ageGroup','',this)">All</button>
+  </span>
+
   <span class="filter-label ms-3">Other:</span>
   <button class="filter-btn" data-filter="withImage" data-value="yes" onclick="toggleImageFilter(this)">
     <i class="bi bi-image me-1"></i>Has image
@@ -624,7 +629,7 @@ let activeBook   = null;
 let adminMode    = false;
 let adminToken   = '';
 let searchTimer  = null;
-let filters      = { language: '', status: '', search: '', withImage: false };
+let filters      = { language: '', ageGroup: '', status: '', search: '', withImage: false };
 
 const bookModal    = new bootstrap.Modal('#bookModal');
 const reserveModal = new bootstrap.Modal('#reserveModal');
@@ -671,6 +676,7 @@ function onBooksLoaded(result) {
   if (!result.success) { showToast(result.error || 'Failed to load books.', 'danger'); return; }
   allBooks = result.books || [];
   allBooks.sort((a, b) => (b.imageUrl ? 1 : 0) - (a.imageUrl ? 1 : 0));
+  renderAgeGroupFilters();
   applyFilters();
 }
 
@@ -680,10 +686,12 @@ function onBooksLoaded(result) {
 function applyFilters() {
   const q  = filters.search.toLowerCase();
   const lg = filters.language.toLowerCase();
+  const ag = filters.ageGroup.toLowerCase();
   const st = filters.status.toLowerCase();
 
   filtered = allBooks.filter(b => {
     if (lg && b.language.toLowerCase() !== lg) return false;
+    if (ag && ageGroupFilterValue(b.ageGroup) !== ag) return false;
     if (st && b.status.toLowerCase()   !== st) return false;
     if (filters.withImage && !b.imageUrl)       return false;
     if (q && !b.bookName.toLowerCase().includes(q) &&
@@ -724,8 +732,30 @@ function toggleImageFilter(el) {
   applyFilters();
 }
 
+function renderAgeGroupFilters() {
+  const container = document.getElementById('ageGroupFilters');
+  if (!container) return;
+
+  const groups = [];
+  const seen = {};
+  allBooks.forEach(book => {
+    const raw = String(book.ageGroup || '').trim();
+    const value = ageGroupFilterValue(raw);
+    if (!value || seen[value]) return;
+    seen[value] = true;
+    groups.push({ raw, value, label: formatAgeGroup(raw) });
+  });
+
+  groups.sort((a, b) => ageGroupSortKey(a.raw).localeCompare(ageGroupSortKey(b.raw), undefined, { numeric: true }));
+
+  container.innerHTML = `<button class="filter-btn active" data-filter="ageGroup" data-value="" onclick="setFilter('ageGroup','',this)">All</button>` +
+    groups.map(group =>
+      `<button class="filter-btn" data-filter="ageGroup" data-value="${escAttr(group.value)}" onclick="setFilter('ageGroup','${escAttr(group.value)}',this)">${escHtml(group.label)}</button>`
+    ).join('');
+}
+
 function resetFilters() {
-  filters = { language: '', status: '', search: '', withImage: false };
+  filters = { language: '', ageGroup: '', status: '', search: '', withImage: false };
   document.querySelectorAll('.filter-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.value === '');
   });
@@ -764,7 +794,7 @@ function bookCardHtml(book) {
       <div class="book-meta">${escHtml(book.category || '—')}</div>
       <div class="book-no">
         ${escHtml(book.bookNo)} · ${escHtml(book.language)}
-        ${book.ageGroup ? ' · ' + escHtml(book.ageGroup) : ''}
+        ${book.ageGroup ? ' · ' + escHtml(formatAgeGroup(book.ageGroup)) : ''}
       </div>
       ${adminInfo}
     </div>
@@ -861,7 +891,7 @@ function openBookDetail(bookNo) {
         <div class="text-muted small mb-1">${escHtml(book.author || '—')}</div>
         <div class="text-muted small mb-1">${escHtml(book.category || '—')}</div>
         <div class="mb-1 small"><span class="text-muted">Language:</span> ${escHtml(book.language)}</div>
-        ${book.ageGroup ? `<div class="mb-1 small"><span class="text-muted">Age group:</span> ${escHtml(book.ageGroup)}</div>` : ''}
+        ${book.ageGroup ? `<div class="mb-1 small"><span class="text-muted">Age group:</span> ${escHtml(formatAgeGroup(book.ageGroup))}</div>` : ''}
         <div class="mb-2">${pill}</div>
       </div>
     </div>
@@ -1093,6 +1123,27 @@ function refreshBook(bookNo, status, issuedTo, phone, date, notes) {
 
 function statusClass(status) {
   return { 'Available': 'available', 'Reserved': 'reserved', 'Issued': 'issued' }[status] || 'available';
+}
+
+function formatAgeGroup(ageGroup) {
+  const value = String(ageGroup || '').trim();
+  if (!value) return '';
+  if (/^all\s+age\s+groups?$/i.test(value) || /^all\s+ages?$/i.test(value)) return 'All ages';
+  if (/^ages?\b/i.test(value)) return value;
+  return 'Ages ' + value;
+}
+
+function ageGroupFilterValue(ageGroup) {
+  const value = String(ageGroup || '').trim().toLowerCase();
+  if (!value) return '';
+  if (/^all\s+age\s+groups?$/.test(value) || /^all\s+ages?$/.test(value)) return 'all-ages';
+  return value.replace(/\s+/g, ' ');
+}
+
+function ageGroupSortKey(ageGroup) {
+  const value = String(ageGroup || '').trim();
+  if (/^all\s+age\s+groups?$/i.test(value) || /^all\s+ages?$/i.test(value)) return '999-all-ages';
+  return value;
 }
 
 // ── Loading screen animation ──────────────────────
