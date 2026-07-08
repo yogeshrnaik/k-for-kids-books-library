@@ -761,7 +761,11 @@ function bookCardHtml(book) {
     <div class="book-info">
       <div class="book-title">${escHtml(book.bookName)}</div>
       <div class="book-meta">${escHtml(book.author || '—')}</div>
-      <div class="book-no">${escHtml(book.bookNo)} · ${escHtml(book.language)}</div>
+      <div class="book-meta">${escHtml(book.category || '—')}</div>
+      <div class="book-no">
+        ${escHtml(book.bookNo)} · ${escHtml(book.language)}
+        ${book.ageGroup ? ' · ' + escHtml(book.ageGroup) : ''}
+      </div>
       ${adminInfo}
     </div>
   </div>`;
@@ -855,8 +859,9 @@ function openBookDetail(bookNo) {
       <div>
         <h6 class="mb-1 fw-bold">${escHtml(book.bookName)}</h6>
         <div class="text-muted small mb-1">${escHtml(book.author || '—')}</div>
-        <div class="text-muted small mb-2">${escHtml(book.publication || '—')}</div>
+        <div class="text-muted small mb-1">${escHtml(book.category || '—')}</div>
         <div class="mb-1 small"><span class="text-muted">Language:</span> ${escHtml(book.language)}</div>
+        ${book.ageGroup ? `<div class="mb-1 small"><span class="text-muted">Age group:</span> ${escHtml(book.ageGroup)}</div>` : ''}
         <div class="mb-2">${pill}</div>
       </div>
     </div>

@@ -25,24 +25,24 @@ const CONFIG = {
   CUSTOMER_SHEET_NAME: 'Customer DB'
 };
 
-// Column indices in the Master DB sheet (0-based)
-// Original: Sr.No | Language | Book no. | Book name | Issued to | Author | Publication
-// New cols added by this script:
-const C = {
-  SR_NO:       0,
-  LANGUAGE:    1,
-  BOOK_NO:     2,
-  BOOK_NAME:   3,
-  ISSUED_TO:   4,
-  AUTHOR:      5,
-  PUBLICATION: 6,
-  STATUS:      7,   // Available / Reserved / Issued
-  RESERVED_BY: 8,
-  PHONE:       9,
-  PICKUP_DATE: 10,
-  ISSUE_DATE:  11,
-  NOTES:       12,
-  IMAGE_NAME:  13   // Relative path to image file, e.g. "Horrid Henry- Revenge.jpg"
+// Header names in the Master DB sheet. Code resolves these to column positions
+// at runtime so sheet columns can be referenced by name instead of fixed indexes.
+const MASTER_HEADERS = {
+  SR_NO:       'Sr. No.',
+  LANGUAGE:    'Language',
+  BOOK_NO:     'Book no.',
+  AGE_GROUP:   'Age group',
+  BOOK_NAME:   'Book name',
+  CATEGORY:    'Category',
+  ISSUED_TO:   'Issued to',
+  AUTHOR:      'Author',
+  STATUS:      'Status',
+  RESERVED_BY: 'Reserved By',
+  PHONE:       'Phone',
+  PICKUP_DATE: 'Pickup Date',
+  ISSUE_DATE:  'Issue Date',
+  NOTES:       'Notes',
+  IMAGE_NAME:  'Image Name'
 };
 
 // Column indices in Customer DB sheet (0-based)
@@ -522,12 +522,12 @@ function doGet(e) {
 // ─────────────────────────────────────────────
 
 function setupImageNames() {
-  const { sheet, headerRow } = getSheetAndHeader_();
+  const { sheet, headerRow, columns } = getSheetAndHeader_();
   const data = sheet.getDataRange().getValues();
 
   // Ensure "Image Name" header exists
-  if (!trim_(data[headerRow][C.IMAGE_NAME])) {
-    sheet.getRange(headerRow + 1, C.IMAGE_NAME + 1).setValue('Image Name');
+  if (!trim_(data[headerRow][columns.IMAGE_NAME])) {
+    sheet.getRange(headerRow + 1, columns.IMAGE_NAME + 1).setValue(MASTER_HEADERS.IMAGE_NAME);
   }
 
   // Build a normalised-title lookup from IMAGE_MAP (covers both bookNo and title keys)
@@ -540,11 +540,11 @@ function setupImageNames() {
   const updates = [];
 
   for (let i = headerRow + 1; i < data.length; i++) {
-    const bookNo   = trim_(data[i][C.BOOK_NO]);
-    const bookName = trim_(data[i][C.BOOK_NAME]);
+    const bookNo   = trim_(data[i][columns.BOOK_NO]);
+    const bookName = trim_(data[i][columns.BOOK_NAME]);
     if (!bookNo) continue;
 
-    const existing = trim_(data[i][C.IMAGE_NAME]);
+    const existing = trim_(data[i][columns.IMAGE_NAME]);
     if (existing) continue; // don't overwrite existing entries
 
     // 1. Exact bookNo match, 2. Normalised title match
@@ -562,7 +562,7 @@ function setupImageNames() {
 
   // Batch-write for performance
   updates.forEach(u => {
-    sheet.getRange(u.row, C.IMAGE_NAME + 1).setValue(u.value);
+    sheet.getRange(u.row, columns.IMAGE_NAME + 1).setValue(u.value);
   });
 
   // Clear cache so image URLs get rebuilt
@@ -577,7 +577,7 @@ function setupImageNames() {
 // ─────────────────────────────────────────────
 
 // ── Public books cache (chunked, 5-min TTL) ───────────────────────────────────
-const BOOKS_CACHE_KEY   = 'PUBLIC_BOOKS_V2';
+const BOOKS_CACHE_KEY   = 'PUBLIC_BOOKS_MASTER_HEADERS_V1';
 const BOOKS_CACHE_SECS  = 300; // 5 minutes
 const CHUNK_SIZE        = 90000; // bytes per CacheService entry (limit 100 KB)
 const ADMIN_SESSION_SECS = 7200; // 2 hours
@@ -628,7 +628,7 @@ function getBooks(filters, adminCredential) {
       if (cached) return { success: true, books: cached };
     }
 
-    const { sheet, headerRow } = getSheetAndHeader_();
+    const { sheet, headerRow, columns } = getSheetAndHeader_();
     const data     = sheet.getDataRange().getValues();
     const imageMap = getImageMap_();
     const tz       = Session.getScriptTimeZone();
@@ -636,23 +636,24 @@ function getBooks(filters, adminCredential) {
     const books = [];
     for (let i = headerRow + 1; i < data.length; i++) {
       const row     = data[i];
-      const bookNo  = trim_(row[C.BOOK_NO]);
+      const bookNo  = trim_(row[columns.BOOK_NO]);
       if (!bookNo)  continue;
 
-      const language    = trim_(row[C.LANGUAGE]);
-      const bookName    = trim_(row[C.BOOK_NAME]);
-      const issuedTo    = trim_(row[C.ISSUED_TO]);
-      const author      = trim_(row[C.AUTHOR]);
-      const publication = trim_(row[C.PUBLICATION]);
-      const reservedBy  = trim_(row[C.RESERVED_BY]);
-      const phone       = trim_(row[C.PHONE]);
-      const notes       = trim_(row[C.NOTES]);
+      const language   = trim_(row[columns.LANGUAGE]);
+      const ageGroup   = trim_(row[columns.AGE_GROUP]);
+      const bookName   = trim_(row[columns.BOOK_NAME]);
+      const category   = trim_(row[columns.CATEGORY]);
+      const issuedTo   = trim_(row[columns.ISSUED_TO]);
+      const author     = trim_(row[columns.AUTHOR]);
+      const reservedBy = trim_(row[columns.RESERVED_BY]);
+      const phone      = trim_(row[columns.PHONE]);
+      const notes      = trim_(row[columns.NOTES]);
 
-      let status = trim_(row[C.STATUS]);
+      let status = trim_(row[columns.STATUS]);
       if (!status) status = issuedTo ? 'Issued' : 'Available';
 
-      const pickupDate = formatDate_(row[C.PICKUP_DATE], tz);
-      const issueDate  = formatDate_(row[C.ISSUE_DATE],  tz);
+      const pickupDate = formatDate_(row[columns.PICKUP_DATE], tz);
+      const issueDate  = formatDate_(row[columns.ISSUE_DATE],  tz);
 
       if (filters) {
         if (filters.language && language.toLowerCase() !== filters.language.toLowerCase()) continue;
@@ -667,8 +668,9 @@ function getBooks(filters, adminCredential) {
 
       books.push({
         rowIndex: i + 1,
-        srNo: row[C.SR_NO],
-        language, bookNo, bookName, author, publication, status,
+        srNo: row[columns.SR_NO],
+        language, bookNo, bookName, author, ageGroup, category,
+        status,
         imageUrl:   imageMap[bookNo] || '',
         // Admin-only fields — empty string for non-admin
         issuedTo:   isAdmin ? issuedTo   : '',
@@ -707,24 +709,24 @@ function reserveBook(bookNo, subscriberName, phone, pickupDate, notes) {
     if (phone.length > 40)           return { success: false, error: 'Phone number is too long.' };
     if (notes.length > 500)          return { success: false, error: 'Notes are too long.' };
 
-    const { sheet, headerRow } = getSheetAndHeader_();
+    const { sheet, headerRow, columns } = getSheetAndHeader_();
     const data = sheet.getDataRange().getValues();
 
     for (let i = headerRow + 1; i < data.length; i++) {
-      if (trim_(data[i][C.BOOK_NO]) !== bookNo.trim()) continue;
+      if (trim_(data[i][columns.BOOK_NO]) !== bookNo.trim()) continue;
 
-      const status   = trim_(data[i][C.STATUS]);
-      const issuedTo = trim_(data[i][C.ISSUED_TO]);
+      const status   = trim_(data[i][columns.STATUS]);
+      const issuedTo = trim_(data[i][columns.ISSUED_TO]);
       if (issuedTo || (status && status !== 'Available')) {
         return { success: false, error: 'Sorry, this book is no longer available.' };
       }
 
       const r = i + 1;
-      sheet.getRange(r, C.STATUS      + 1).setValue('Reserved');
-      sheet.getRange(r, C.RESERVED_BY + 1).setValue(subscriberName);
-      sheet.getRange(r, C.PHONE       + 1).setValue(phone);
-      sheet.getRange(r, C.PICKUP_DATE + 1).setValue(pickupDate);
-      sheet.getRange(r, C.NOTES       + 1).setValue(notes);
+      sheet.getRange(r, columns.STATUS      + 1).setValue('Reserved');
+      sheet.getRange(r, columns.RESERVED_BY + 1).setValue(subscriberName);
+      sheet.getRange(r, columns.PHONE       + 1).setValue(phone);
+      sheet.getRange(r, columns.PICKUP_DATE + 1).setValue(pickupDate);
+      sheet.getRange(r, columns.NOTES       + 1).setValue(notes);
 
       invalidatePublicBooksCache_();
       return { success: true, message: '✅ Book reserved! We will contact you when it\'s ready.' };
@@ -740,21 +742,21 @@ function issueBook(bookNo, subscriberName, issueDate, adminCredential) {
     if (!verifyAdminCredential_(adminCredential)) return { success: false, error: 'Admin session expired. Please log in again.' };
     if (!bookNo || !subscriberName)   return { success: false, error: 'Book number and subscriber name required.' };
 
-    const { sheet, headerRow } = getSheetAndHeader_();
+    const { sheet, headerRow, columns } = getSheetAndHeader_();
     const data = sheet.getDataRange().getValues();
 
     for (let i = headerRow + 1; i < data.length; i++) {
-      if (trim_(data[i][C.BOOK_NO]) !== bookNo.trim()) continue;
+      if (trim_(data[i][columns.BOOK_NO]) !== bookNo.trim()) continue;
 
       const r        = i + 1;
       const date     = issueDate ? new Date(issueDate) : new Date();
-      const bookName = trim_(data[i][C.BOOK_NAME]);
+      const bookName = trim_(data[i][columns.BOOK_NAME]);
 
-      sheet.getRange(r, C.ISSUED_TO   + 1).setValue(subscriberName.trim());
-      sheet.getRange(r, C.STATUS      + 1).setValue('Issued');
-      sheet.getRange(r, C.ISSUE_DATE  + 1).setValue(date);
-      sheet.getRange(r, C.RESERVED_BY + 1).setValue('');
-      sheet.getRange(r, C.PHONE       + 1).setValue('');
+      sheet.getRange(r, columns.ISSUED_TO   + 1).setValue(subscriberName.trim());
+      sheet.getRange(r, columns.STATUS      + 1).setValue('Issued');
+      sheet.getRange(r, columns.ISSUE_DATE  + 1).setValue(date);
+      sheet.getRange(r, columns.RESERVED_BY + 1).setValue('');
+      sheet.getRange(r, columns.PHONE       + 1).setValue('');
 
       // Log to customer's named tab
       logIssueToCustTab_(subscriberName.trim(), bookNo.trim(), bookName, date);
@@ -772,22 +774,22 @@ function returnBook(bookNo, adminCredential) {
   try {
     if (!verifyAdminCredential_(adminCredential)) return { success: false, error: 'Admin session expired. Please log in again.' };
 
-    const { sheet, headerRow } = getSheetAndHeader_();
+    const { sheet, headerRow, columns } = getSheetAndHeader_();
     const data = sheet.getDataRange().getValues();
 
     for (let i = headerRow + 1; i < data.length; i++) {
-      if (trim_(data[i][C.BOOK_NO]) !== bookNo.trim()) continue;
+      if (trim_(data[i][columns.BOOK_NO]) !== bookNo.trim()) continue;
 
       const r        = i + 1;
-      const issuedTo = trim_(data[i][C.ISSUED_TO]);
+      const issuedTo = trim_(data[i][columns.ISSUED_TO]);
 
-      sheet.getRange(r, C.ISSUED_TO   + 1).setValue('');
-      sheet.getRange(r, C.STATUS      + 1).setValue('Available');
-      sheet.getRange(r, C.ISSUE_DATE  + 1).setValue('');
-      sheet.getRange(r, C.RESERVED_BY + 1).setValue('');
-      sheet.getRange(r, C.PHONE       + 1).setValue('');
-      sheet.getRange(r, C.PICKUP_DATE + 1).setValue('');
-      sheet.getRange(r, C.NOTES       + 1).setValue('');
+      sheet.getRange(r, columns.ISSUED_TO   + 1).setValue('');
+      sheet.getRange(r, columns.STATUS      + 1).setValue('Available');
+      sheet.getRange(r, columns.ISSUE_DATE  + 1).setValue('');
+      sheet.getRange(r, columns.RESERVED_BY + 1).setValue('');
+      sheet.getRange(r, columns.PHONE       + 1).setValue('');
+      sheet.getRange(r, columns.PICKUP_DATE + 1).setValue('');
+      sheet.getRange(r, columns.NOTES       + 1).setValue('');
 
       // Log return to customer's named tab
       if (issuedTo) {
@@ -807,18 +809,18 @@ function cancelReservation(bookNo, adminCredential) {
   try {
     if (!verifyAdminCredential_(adminCredential)) return { success: false, error: 'Admin session expired. Please log in again.' };
 
-    const { sheet, headerRow } = getSheetAndHeader_();
+    const { sheet, headerRow, columns } = getSheetAndHeader_();
     const data = sheet.getDataRange().getValues();
 
     for (let i = headerRow + 1; i < data.length; i++) {
-      if (trim_(data[i][C.BOOK_NO]) !== bookNo.trim()) continue;
+      if (trim_(data[i][columns.BOOK_NO]) !== bookNo.trim()) continue;
 
       const r = i + 1;
-      sheet.getRange(r, C.STATUS      + 1).setValue('Available');
-      sheet.getRange(r, C.RESERVED_BY + 1).setValue('');
-      sheet.getRange(r, C.PHONE       + 1).setValue('');
-      sheet.getRange(r, C.PICKUP_DATE + 1).setValue('');
-      sheet.getRange(r, C.NOTES       + 1).setValue('');
+      sheet.getRange(r, columns.STATUS      + 1).setValue('Available');
+      sheet.getRange(r, columns.RESERVED_BY + 1).setValue('');
+      sheet.getRange(r, columns.PHONE       + 1).setValue('');
+      sheet.getRange(r, columns.PICKUP_DATE + 1).setValue('');
+      sheet.getRange(r, columns.NOTES       + 1).setValue('');
 
       invalidatePublicBooksCache_();
       return { success: true, message: '✅ Reservation cancelled.' };
@@ -1066,21 +1068,55 @@ function getSheetAndHeader_() {
   const data = sheet.getDataRange().getValues();
   let headerRow = -1;
   for (let i = 0; i < data.length; i++) {
-    const cell = String(data[i][C.BOOK_NO] || '').toLowerCase().trim();
-    if (cell === 'book no.' || cell === 'book no') { headerRow = i; break; }
+    if (rowHasMasterHeaders_(data[i])) { headerRow = i; break; }
   }
   if (headerRow === -1) throw new Error('Could not find header row in "' + CONFIG.MASTER_SHEET_NAME + '".');
 
-  // Ensure new column headers exist
-  const newHeaders = ['Status','Reserved By','Phone','Pickup Date','Issue Date','Notes','Image Name'];
-  newHeaders.forEach((h, idx) => {
-    const col = C.STATUS + idx;
-    if (!trim_(data[headerRow][col])) {
-      sheet.getRange(headerRow + 1, col + 1).setValue(h);
+  const columns = getMasterColumnMap_(data[headerRow]);
+
+  return { sheet, headerRow, columns };
+}
+
+function rowHasMasterHeaders_(row) {
+  const normalized = row.map(normalizeHeader_);
+  const requiredHeaders = [
+    MASTER_HEADERS.SR_NO,
+    MASTER_HEADERS.LANGUAGE,
+    MASTER_HEADERS.BOOK_NO,
+    MASTER_HEADERS.AGE_GROUP,
+    MASTER_HEADERS.BOOK_NAME,
+    MASTER_HEADERS.CATEGORY,
+    MASTER_HEADERS.ISSUED_TO,
+    MASTER_HEADERS.AUTHOR,
+    MASTER_HEADERS.STATUS
+  ];
+  return requiredHeaders.every(header => normalized.includes(normalizeHeader_(header)));
+}
+
+function getMasterColumnMap_(headerRowValues) {
+  const columns = {};
+  const normalizedHeaders = headerRowValues.map(normalizeHeader_);
+  const missingHeaders = [];
+
+  Object.keys(MASTER_HEADERS).forEach(key => {
+    const headerName = MASTER_HEADERS[key];
+    const idx = normalizedHeaders.indexOf(normalizeHeader_(headerName));
+    if (idx === -1) {
+      missingHeaders.push(headerName);
+      return;
     }
+    columns[key] = idx;
   });
 
-  return { sheet, headerRow };
+  if (missingHeaders.length) {
+    throw new Error('Missing Master DB column(s): ' + missingHeaders.join(', '));
+  }
+
+  return columns;
+}
+
+function normalizeHeader_(value) {
+  return trim_(value).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
 /**
@@ -1120,13 +1156,13 @@ function getImageMap_() {
   });
 
   // Step 2: Read Image Name column from sheet
-  const { sheet, headerRow } = getSheetAndHeader_();
+  const { sheet, headerRow, columns } = getSheetAndHeader_();
   const data = sheet.getDataRange().getValues();
 
   const map = {};
   for (let i = headerRow + 1; i < data.length; i++) {
-    const bookNo    = trim_(data[i][C.BOOK_NO]);
-    const imagePath = trim_(data[i][C.IMAGE_NAME]);  // e.g. "Horrid Henry- Revenge.jpg"
+    const bookNo    = trim_(data[i][columns.BOOK_NO]);
+    const imagePath = trim_(data[i][columns.IMAGE_NAME]);  // e.g. "Horrid Henry- Revenge.jpg"
     if (!bookNo || !imagePath) continue;
 
     const fname  = imagePath.split('/').pop().toLowerCase();  // just the filename
