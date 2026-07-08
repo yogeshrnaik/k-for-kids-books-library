@@ -566,7 +566,7 @@ function setupImageNames() {
   });
 
   // Clear cache so image URLs get rebuilt
-  CacheService.getScriptCache().remove('BOOK_IMAGE_MAP');
+  CacheService.getScriptCache().remove(IMAGE_CACHE_KEY);
 
   Logger.log('✅ setupImageNames: wrote image names for ' + updated + ' books.');
   return { success: true, updated, message: 'Image names written for ' + updated + ' books.' };
@@ -577,7 +577,8 @@ function setupImageNames() {
 // ─────────────────────────────────────────────
 
 // ── Public books cache (chunked, 5-min TTL) ───────────────────────────────────
-const BOOKS_CACHE_KEY   = 'PUBLIC_BOOKS_MASTER_HEADERS_V1';
+const BOOKS_CACHE_KEY   = 'PUBLIC_BOOKS_MASTER_HEADERS_IMAGES_V1';
+const IMAGE_CACHE_KEY   = 'BOOK_IMAGE_MAP_MASTER_HEADERS_V2';
 const BOOKS_CACHE_SECS  = 300; // 5 minutes
 const CHUNK_SIZE        = 90000; // bytes per CacheService entry (limit 100 KB)
 const ADMIN_SESSION_SECS = 7200; // 2 hours
@@ -1128,30 +1129,16 @@ function normalizeHeader_(value) {
  */
 function getImageMap_() {
   const cache  = CacheService.getScriptCache();
-  const cached = cache.get('BOOK_IMAGE_MAP');
+  const cached = cache.get(IMAGE_CACHE_KEY);
   if (cached) return JSON.parse(cached);
 
-  // Step 1: filename (lowercase) → fileId
+  // Step 1: filename (lowercase) and normalized filename → fileId
   const fileIdMap = {};
+  const normalizedFileIdMap = {};
   CONFIG.IMAGE_FOLDER_IDS.forEach(folderId => {
     try {
       const folder = DriveApp.getFolderById(folderId);
-      // Also check subfolders (age-7-15, age-2-5)
-      const subFolders = folder.getFolders();
-      while (subFolders.hasNext()) {
-        const sub   = subFolders.next();
-        const files = sub.getFiles();
-        while (files.hasNext()) {
-          const f = files.next();
-          fileIdMap[f.getName().toLowerCase()] = f.getId();
-        }
-      }
-      // Also check files directly in the folder
-      const files = folder.getFiles();
-      while (files.hasNext()) {
-        const f = files.next();
-        fileIdMap[f.getName().toLowerCase()] = f.getId();
-      }
+      recordImageFilesInFolder_(folder, fileIdMap, normalizedFileIdMap);
     } catch (e) { Logger.log('Drive folder error: ' + e.message); }
   });
 
@@ -1162,18 +1149,58 @@ function getImageMap_() {
   const map = {};
   for (let i = headerRow + 1; i < data.length; i++) {
     const bookNo    = trim_(data[i][columns.BOOK_NO]);
-    const imagePath = trim_(data[i][columns.IMAGE_NAME]);  // e.g. "Horrid Henry- Revenge.jpg"
-    if (!bookNo || !imagePath) continue;
+    const bookName  = trim_(data[i][columns.BOOK_NAME]);
+    const imagePath = trim_(data[i][columns.IMAGE_NAME]) || IMAGE_MAP[bookNo] || '';  // e.g. "Horrid Henry- Revenge.jpg"
+    if (!bookNo) continue;
 
-    const fname  = imagePath.split('/').pop().toLowerCase();  // just the filename
-    const fileId = fileIdMap[fname];
+    const fileId = findImageFileId_(imagePath, bookName, bookNo, fileIdMap, normalizedFileIdMap);
     if (fileId) {
-      map[bookNo] = 'https://drive.google.com/thumbnail?id=' + fileId + '&sz=w400';
+      map[bookNo] = buildDriveThumbnailUrl_(fileId);
     }
   }
 
-  try { cache.put('BOOK_IMAGE_MAP', JSON.stringify(map), 1800); } catch (e) {}
+  try { cache.put(IMAGE_CACHE_KEY, JSON.stringify(map), 1800); } catch (e) {}
   return map;
+}
+
+function recordImageFilesInFolder_(folder, fileIdMap, normalizedFileIdMap) {
+  const files = folder.getFiles();
+  while (files.hasNext()) {
+    recordImageFile_(files.next(), fileIdMap, normalizedFileIdMap);
+  }
+
+  const subFolders = folder.getFolders();
+  while (subFolders.hasNext()) {
+    recordImageFilesInFolder_(subFolders.next(), fileIdMap, normalizedFileIdMap);
+  }
+}
+
+function recordImageFile_(file, fileIdMap, normalizedFileIdMap) {
+  const fileName = trim_(file.getName());
+  const fileId = file.getId();
+  fileIdMap[fileName.toLowerCase()] = fileId;
+  const normalizedName = normalizeImageFileName_(fileName);
+  if (normalizedName && !normalizedFileIdMap[normalizedName]) {
+    normalizedFileIdMap[normalizedName] = fileId;
+  }
+}
+
+function findImageFileId_(imagePath, bookName, bookNo, fileIdMap, normalizedFileIdMap) {
+  const imageFileName = trim_(imagePath).split('/').pop();
+  const exactKey = imageFileName.toLowerCase();
+  return fileIdMap[exactKey] ||
+         normalizedFileIdMap[normalizeImageFileName_(imageFileName)] ||
+         normalizedFileIdMap[normalizeImageFileName_(bookName)] ||
+         normalizedFileIdMap[normalizeHeader_(bookNo)] ||
+         '';
+}
+
+function buildDriveThumbnailUrl_(fileId) {
+  return 'https://drive.google.com/thumbnail?id=' + encodeURIComponent(fileId) + '&sz=w400';
+}
+
+function normalizeImageFileName_(fileName) {
+  return normalizeHeader_(String(fileName || '').replace(/\.[^.]+$/, ''));
 }
 
 function verifyAdmin_(password) {
