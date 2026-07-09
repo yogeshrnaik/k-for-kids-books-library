@@ -560,10 +560,6 @@
           <label class="form-label">Phone Number</label>
           <input type="tel" id="rPhone" class="form-control" placeholder="10-digit mobile">
         </div>
-        <div class="mb-3">
-          <label class="form-label">Preferred Pickup Date</label>
-          <input type="date" id="rDate" class="form-control">
-        </div>
         <div class="mb-1">
           <label class="form-label">Notes (optional)</label>
           <textarea id="rNotes" class="form-control" rows="2" placeholder="Any special requests…"></textarea>
@@ -639,9 +635,8 @@ const issueModal   = new bootstrap.Modal('#issueModal');
 // Init
 // ════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', () => {
-  // Set today as default date in date pickers
+  // Set today as default date in admin date picker
   const today = new Date().toISOString().split('T')[0];
-  document.getElementById('rDate').value = today;
   document.getElementById('iDate').value = today;
   loadBooks();
 
@@ -862,7 +857,6 @@ function openBookDetail(bookNo) {
       ? `<div class="alert alert-warning py-2 px-3 mt-2 mb-0" style="font-size:.82rem">
            <i class="bi bi-bookmark-fill me-1"></i>
            Reserved by <b>${escHtml(book.reservedBy)}</b>
-           ${book.pickupDate ? ' · Pickup: <b>' + escHtml(book.pickupDate) + '</b>' : ''}
            ${book.phone ? '<br>📞 ' + escHtml(book.phone) : ''}
            ${book.notes ? '<br><i>' + escHtml(book.notes) + '</i>' : ''}
          </div>`
@@ -955,7 +949,6 @@ function openReserve() {
 function submitReservation() {
   const name  = document.getElementById('rName').value.trim();
   const phone = document.getElementById('rPhone').value.trim();
-  const date  = document.getElementById('rDate').value;
   const notes = document.getElementById('rNotes').value.trim();
 
   if (!name) { showToast('Please enter your name.', 'warning'); return; }
@@ -970,7 +963,7 @@ function submitReservation() {
       if (res.success) {
         showToast(res.message, 'success');
         // Never store subscriber name in local state for non-admin sessions
-        refreshBook(activeBook.bookNo, 'Reserved', adminMode ? name : '', adminMode ? phone : '', date, adminMode ? notes : '');
+        refreshBook(activeBook.bookNo, 'Reserved', adminMode ? name : '', adminMode ? phone : '', adminMode ? notes : '');
       } else {
         showToast(res.error || 'Reservation failed.', 'danger');
       }
@@ -979,7 +972,7 @@ function submitReservation() {
       setButtonLoading('reserveModal', false);
       showToast('Something went wrong. Please try again.', 'danger');
     })
-    .reserveBook(activeBook.bookNo, name, phone, date, notes);
+    .reserveBook(activeBook.bookNo, name, phone, notes);
 }
 
 // ════════════════════════════════════════════════
@@ -1009,7 +1002,7 @@ function submitIssue() {
       issueModal.hide();
       if (res.success) {
         showToast(res.message, 'success');
-        refreshBook(activeBook.bookNo, 'Issued', subscriber, '', date, '');
+        refreshBook(activeBook.bookNo, 'Issued', subscriber, '', '', date);
       } else {
         showToast(res.error || 'Failed.', 'danger');
       }
@@ -1036,8 +1029,8 @@ function doAdminAction(action, bookNo) {
     .withSuccessHandler(res => {
       if (res.success) {
         showToast(res.message, 'success');
-        if (action === 'cancelReservation') refreshBook(bookNo, 'Available', '', '', '', '');
-        if (action === 'returnBook')        refreshBook(bookNo, 'Available', '', '', '', '');
+        if (action === 'cancelReservation') refreshBook(bookNo, 'Available', '', '', '');
+        if (action === 'returnBook')        refreshBook(bookNo, 'Available', '', '', '');
       } else {
         showToast(res.error || 'Failed.', 'danger');
       }
@@ -1103,7 +1096,7 @@ function logoutAdmin() {
 // ════════════════════════════════════════════════
 
 /** Optimistically update a book in local state instead of full reload */
-function refreshBook(bookNo, status, issuedTo, phone, date, notes) {
+function refreshBook(bookNo, status, issuedTo, phone, notes, issueDate = '') {
   const idx = allBooks.findIndex(b => b.bookNo === bookNo);
   if (idx === -1) { loadBooks(); return; }
 
@@ -1113,8 +1106,7 @@ function refreshBook(bookNo, status, issuedTo, phone, date, notes) {
     issuedTo:   status === 'Issued'   ? issuedTo : '',
     reservedBy: status === 'Reserved' ? issuedTo : '',
     phone:      status === 'Reserved' ? phone    : '',
-    pickupDate: status === 'Reserved' ? date     : '',
-    issueDate:  status === 'Issued'   ? date     : '',
+    issueDate:  status === 'Issued'   ? issueDate : '',
     notes
   };
   activeBook = allBooks[idx];

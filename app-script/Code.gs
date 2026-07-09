@@ -39,7 +39,6 @@ const MASTER_HEADERS = {
   STATUS:      'Status',
   RESERVED_BY: 'Reserved By',
   PHONE:       'Phone',
-  PICKUP_DATE: 'Pickup Date',
   ISSUE_DATE:  'Issue Date',
   NOTES:       'Notes',
   IMAGE_NAME:  'Image Name'
@@ -656,7 +655,6 @@ function getBooks(filters, adminCredential) {
       let status = trim_(displayRow[columns.STATUS]);
       if (!status) status = issuedTo ? 'Issued' : 'Available';
 
-      const pickupDate = formatDate_(row[columns.PICKUP_DATE], tz);
       const issueDate  = formatDate_(row[columns.ISSUE_DATE],  tz);
 
       if (filters) {
@@ -680,7 +678,6 @@ function getBooks(filters, adminCredential) {
         issuedTo:   isAdmin ? issuedTo   : '',
         reservedBy: isAdmin ? reservedBy : '',
         phone:      isAdmin ? phone       : '',
-        pickupDate: isAdmin ? pickupDate  : '',
         issueDate:  isAdmin ? issueDate   : '',
         notes:      isAdmin ? notes       : ''
       });
@@ -697,7 +694,7 @@ function getBooks(filters, adminCredential) {
   }
 }
 
-function reserveBook(bookNo, subscriberName, phone, pickupDate, notes) {
+function reserveBook(bookNo, subscriberName, phone, notes) {
   try {
     if (!checkRateLimit_('reserve-book', 5, 300)) {
       return { success: false, error: 'Too many reservation attempts. Please try again later.' };
@@ -706,7 +703,6 @@ function reserveBook(bookNo, subscriberName, phone, pickupDate, notes) {
 
     subscriberName = trim_(subscriberName);
     phone          = trim_(phone);
-    pickupDate     = trim_(pickupDate);
     notes          = trim_(notes);
 
     if (subscriberName.length > 100) return { success: false, error: 'Name is too long.' };
@@ -729,7 +725,6 @@ function reserveBook(bookNo, subscriberName, phone, pickupDate, notes) {
       sheet.getRange(r, columns.STATUS      + 1).setValue('Reserved');
       sheet.getRange(r, columns.RESERVED_BY + 1).setValue(subscriberName);
       sheet.getRange(r, columns.PHONE       + 1).setValue(phone);
-      sheet.getRange(r, columns.PICKUP_DATE + 1).setValue(pickupDate);
       sheet.getRange(r, columns.NOTES       + 1).setValue(notes);
 
       invalidatePublicBooksCache_();
@@ -792,7 +787,6 @@ function returnBook(bookNo, adminCredential) {
       sheet.getRange(r, columns.ISSUE_DATE  + 1).setValue('');
       sheet.getRange(r, columns.RESERVED_BY + 1).setValue('');
       sheet.getRange(r, columns.PHONE       + 1).setValue('');
-      sheet.getRange(r, columns.PICKUP_DATE + 1).setValue('');
       sheet.getRange(r, columns.NOTES       + 1).setValue('');
 
       // Log return to customer's named tab
@@ -823,7 +817,6 @@ function cancelReservation(bookNo, adminCredential) {
       sheet.getRange(r, columns.STATUS      + 1).setValue('Available');
       sheet.getRange(r, columns.RESERVED_BY + 1).setValue('');
       sheet.getRange(r, columns.PHONE       + 1).setValue('');
-      sheet.getRange(r, columns.PICKUP_DATE + 1).setValue('');
       sheet.getRange(r, columns.NOTES       + 1).setValue('');
 
       invalidatePublicBooksCache_();
