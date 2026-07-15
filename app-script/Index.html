@@ -1122,7 +1122,8 @@ function formatAgeGroup(ageGroup) {
   if (!value) return '';
   if (/^all\s+age\s+groups?$/i.test(value) || /^all\s+ages?$/i.test(value)) return 'All ages';
   if (/^ages?\b/i.test(value)) return value;
-  return 'Ages ' + value;
+  if (/^\d/.test(value)) return 'Ages ' + value;
+  return value;
 }
 
 function ageGroupFilterValue(ageGroup) {
