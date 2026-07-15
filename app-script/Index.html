@@ -11,6 +11,7 @@
     --brand:     #2e7d32;
     --brand-lt:  #e8f5e9;
     --accent:    #ff8f00;
+    --app-header-height: 65px;
   }
 
   body { background: #f5f5f5; font-family: 'Segoe UI', sans-serif; }
@@ -27,9 +28,17 @@
     top: 0;
     z-index: 100;
     box-shadow: 0 2px 8px rgba(0,0,0,.2);
+    min-height: var(--app-header-height);
   }
   .app-header h1 { font-size: 1.15rem; margin: 0; font-weight: 700; }
   .app-header .subtitle { font-size: .75rem; opacity: .85; }
+
+  .sticky-controls {
+    position: sticky;
+    top: var(--app-header-height);
+    z-index: 95;
+    box-shadow: 0 2px 8px rgba(0,0,0,.08);
+  }
 
   /* ── Search bar ── */
   .search-bar { background: #fff; padding: 12px 16px; border-bottom: 1px solid #e0e0e0; }
@@ -367,46 +376,48 @@
   </button>
 </div>
 
-<!-- ══════════════ SEARCH ══════════════ -->
-<div class="search-bar" id="searchBarEl">
-  <div class="input-group">
-    <span class="input-group-text bg-white"><i class="bi bi-search text-muted"></i></span>
-    <input type="text" id="searchInput" class="form-control" placeholder="Search by title, author, or book number…"
-           oninput="debouncedSearch()">
-    <button class="btn btn-outline-secondary" onclick="clearSearch()" title="Clear">
-      <i class="bi bi-x"></i>
+<div class="sticky-controls">
+  <!-- ══════════════ SEARCH ══════════════ -->
+  <div class="search-bar" id="searchBarEl">
+    <div class="input-group">
+      <span class="input-group-text bg-white"><i class="bi bi-search text-muted"></i></span>
+      <input type="text" id="searchInput" class="form-control" placeholder="Search by title, author, or book number…"
+             oninput="debouncedSearch()">
+      <button class="btn btn-outline-secondary" onclick="clearSearch()" title="Clear">
+        <i class="bi bi-x"></i>
+      </button>
+    </div>
+  </div>
+
+  <!-- ══════════════ FILTERS ══════════════ -->
+  <div class="filter-bar" id="filterBarEl">
+    <span class="filter-label">Language:</span>
+    <button class="filter-btn active" data-filter="language" data-value="" onclick="setFilter('language','',this)">All</button>
+    <button class="filter-btn" data-filter="language" data-value="marathi" onclick="setFilter('language','marathi',this)">Marathi</button>
+    <button class="filter-btn" data-filter="language" data-value="english" onclick="setFilter('language','english',this)">English</button>
+
+    <span class="filter-label ms-3">Age:</span>
+    <span id="ageGroupFilters">
+      <button class="filter-btn active" data-filter="ageGroup" data-value="" onclick="setFilter('ageGroup','',this)">All</button>
+    </span>
+
+    <span class="filter-label ms-3">Other:</span>
+    <button class="filter-btn" data-filter="withImage" data-value="yes" onclick="toggleImageFilter(this)">
+      <i class="bi bi-image me-1"></i>Has image
+    </button>
+
+    <span class="filter-label ms-3">Status:</span>
+    <button class="filter-btn active" data-filter="status" data-value="" onclick="setFilter('status','',this)">All</button>
+    <button class="filter-btn" data-filter="status" data-value="available" onclick="setFilter('status','available',this)">
+      <span class="text-success">●</span> Available
+    </button>
+    <button class="filter-btn" data-filter="status" data-value="reserved" onclick="setFilter('status','reserved',this)">
+      <span style="color:orange">●</span> Reserved
+    </button>
+    <button class="filter-btn" data-filter="status" data-value="issued" onclick="setFilter('status','issued',this)">
+      <span class="text-danger">●</span> Issued
     </button>
   </div>
-</div>
-
-<!-- ══════════════ FILTERS ══════════════ -->
-<div class="filter-bar" id="filterBarEl">
-  <span class="filter-label">Language:</span>
-  <button class="filter-btn active" data-filter="language" data-value="" onclick="setFilter('language','',this)">All</button>
-  <button class="filter-btn" data-filter="language" data-value="marathi" onclick="setFilter('language','marathi',this)">Marathi</button>
-  <button class="filter-btn" data-filter="language" data-value="english" onclick="setFilter('language','english',this)">English</button>
-
-  <span class="filter-label ms-3">Age:</span>
-  <span id="ageGroupFilters">
-    <button class="filter-btn active" data-filter="ageGroup" data-value="" onclick="setFilter('ageGroup','',this)">All</button>
-  </span>
-
-  <span class="filter-label ms-3">Other:</span>
-  <button class="filter-btn" data-filter="withImage" data-value="yes" onclick="toggleImageFilter(this)">
-    <i class="bi bi-image me-1"></i>Has image
-  </button>
-
-  <span class="filter-label ms-3">Status:</span>
-  <button class="filter-btn active" data-filter="status" data-value="" onclick="setFilter('status','',this)">All</button>
-  <button class="filter-btn" data-filter="status" data-value="available" onclick="setFilter('status','available',this)">
-    <span class="text-success">●</span> Available
-  </button>
-  <button class="filter-btn" data-filter="status" data-value="reserved" onclick="setFilter('status','reserved',this)">
-    <span style="color:orange">●</span> Reserved
-  </button>
-  <button class="filter-btn" data-filter="status" data-value="issued" onclick="setFilter('status','issued',this)">
-    <span class="text-danger">●</span> Issued
-  </button>
 </div>
 
 <!-- ══════════════ STATS ══════════════ -->
