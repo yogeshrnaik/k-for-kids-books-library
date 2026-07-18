@@ -1095,18 +1095,14 @@ function buildAdminSection(book) {
 // ════════════════════════════════════════════════
 function openReserve() {
   if (!activeBook) return;
+  pendingReserveBookNo = activeBook.bookNo;
   if (currentCustomer && customerToken) {
-    pendingReserveBookNo = activeBook.bookNo;
     reserveLoggedInCustomer(activeBook.bookNo);
     return;
   }
 
-  document.getElementById('reserveBookTitle').textContent = '📚 ' + activeBook.bookName + ' (' + activeBook.bookNo + ')';
-  document.getElementById('rName').value  = '';
-  document.getElementById('rPhone').value = '';
-  document.getElementById('rNotes').value = '';
   bookModal.hide();
-  setTimeout(() => reserveModal.show(), 300);
+  setTimeout(() => openCustomerAuth(), 300);
 }
 
 function submitReservation() {
@@ -1154,6 +1150,7 @@ function reserveLoggedInCustomer(bookNo) {
           reservedCustomerId: res.reservedCustomerId || (currentCustomer ? currentCustomer.customerId : ''),
           isMyReservation: true
         });
+        if (pendingReserveBookNo === bookNo) pendingReserveBookNo = '';
         bookModal.hide();
       } else if (res.code === 'LIMIT_REACHED') {
         setInlineButtonLoading(btn, false);
@@ -1441,6 +1438,10 @@ function handleCustomerAuthResponse(res) {
     renderCustomerState();
     loadBooks();
     showToast(res.message || 'Logged in.', 'success');
+    if (pendingReserveBookNo) {
+      const bookNo = pendingReserveBookNo;
+      setTimeout(() => reserveLoggedInCustomer(bookNo), 300);
+    }
   } else {
     showToast((res && res.error) || 'Login failed.', 'danger');
   }
