@@ -12,6 +12,7 @@
 
 const CONFIG = {
   SPREADSHEET_ID: '18nnveeE4RC9ah5zRQuOOzRJJnyOi8EPN8hrDELNgbFY',
+  LEGACY_SPREADSHEET_ID: '1hPnGg26eaRplb-4hQWLyZcJ7pK3hBiJeqfVKdFR9hM0',
 
   // Tab name in your spreadsheet that holds the book list
   MASTER_SHEET_NAME: 'Books-DB',
@@ -22,7 +23,9 @@ const CONFIG = {
   ],
 
   // Customer DB sheet name
-  CUSTOMER_SHEET_NAME: 'Customer DB'
+  CUSTOMER_SHEET_NAME: 'Customer DB',
+  CUSTOMER_DETAILS_SHEET_NAME: 'Customer Details',
+  BOOK_RESERVATIONS_SHEET_NAME: 'Book Reservations'
 };
 
 // Header names in the book source sheet. Code resolves these to column positions
@@ -44,6 +47,8 @@ const MASTER_HEADERS = {
   IMAGE_NAME:  'Image Name'
 };
 
+const RESERVED_CUSTOMER_ID_HEADER = 'Reserved Customer ID';
+
 // Column indices in Customer DB sheet (0-based)
 // Header: Sr no | Name | Date of start | Location | Address | Account status | Till date sum
 const CUST = {
@@ -54,6 +59,64 @@ const CUST = {
   ADDRESS:       4,
   STATUS:        5,  // Active / Inactive / Closed
   TILL_DATE_SUM: 6
+};
+
+const CUSTOMER_DETAILS_HEADERS = [
+  'Customer ID',
+  'Legacy Sr No',
+  'Name',
+  'Date of Start',
+  'Location',
+  'Address',
+  'Account Status',
+  'Till Date Sum',
+  'Email',
+  'Phone',
+  'Subscription Plan',
+  'Monthly Reservation Limit',
+  'Subscription Status',
+  'Auth Method',
+  'Password Salt',
+  'Password Hash',
+  'Google Subject ID',
+  'Invite Code Hash',
+  'Invite Code Expires At',
+  'Invite Status',
+  'Claimed At',
+  'Created At',
+  'Approved At',
+  'Last Login At',
+  'Notes'
+];
+
+const BOOK_RESERVATION_HEADERS = [
+  'Reservation ID',
+  'Customer ID',
+  'Customer Name',
+  'Book No',
+  'Book Name',
+  'Source',
+  'Reserved At',
+  'Issued At',
+  'Returned At',
+  'Reservation Month',
+  'Status',
+  'Cancelled At',
+  'Cancel Reason',
+  'Migrated From Sheet',
+  'Migrated Row',
+  'Created At',
+  'Updated At'
+];
+
+const LEGACY_CUSTOMER_SOURCE_HEADERS = {
+  SR_NO: ['Sr', 'Sr no', 'Sr. No.', 'Sr No'],
+  NAME: ['Name'],
+  DATE_START: ['Date of start', 'Date of Start'],
+  LOCATION: ['Location'],
+  ADDRESS: ['Address'],
+  STATUS: ['Account status', 'Account Status'],
+  TILL_DATE_SUM: ['Till date sum', 'Till Date Sum']
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -571,6 +634,83 @@ function setupImageNames() {
   return { success: true, updated, message: 'Image names written for ' + updated + ' books.' };
 }
 
+/**
+ * Phase 1 setup/migration. Safe to run more than once.
+ *
+ * Creates Customer Details and Book Reservations in the new WebApp Data
+ * spreadsheet, copies legacy Customer DB rows, and adds reservation ownership
+ * support to Books-DB. Existing legacy sheets are read-only in this phase.
+ */
+function setupCustomerReservationSystem(adminCredential, options) {
+  try {
+    if (!canRunSetup_(adminCredential)) {
+      return { success: false, error: 'Setup is restricted to the spreadsheet owner or an active admin session.' };
+    }
+
+    options = options || {};
+    const migrateHistory = options.migrateHistory !== false;
+    const now = new Date();
+    const summary = {
+      success: true,
+      createdSheets: [],
+      addedColumns: [],
+      copiedCustomers: 0,
+      updatedCustomers: 0,
+      generatedCustomerIds: 0,
+      generatedInviteCodes: 0,
+      inviteCodes: [],
+      migratedReservationRows: 0,
+      skippedReservationSheets: [],
+      messages: []
+    };
+
+    const targetSs = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+    const legacySs = SpreadsheetApp.openById(CONFIG.LEGACY_SPREADSHEET_ID);
+
+    const booksResult = ensureBooksReservationOwnerColumn_(targetSs);
+    if (booksResult.added) summary.addedColumns.push(CONFIG.MASTER_SHEET_NAME + ': ' + RESERVED_CUSTOMER_ID_HEADER);
+
+    const customerDetails = ensureSheetWithHeaders_(
+      targetSs,
+      CONFIG.CUSTOMER_DETAILS_SHEET_NAME,
+      CUSTOMER_DETAILS_HEADERS,
+      summary
+    );
+    const customerSetup = migrateLegacyCustomers_(legacySs, customerDetails.sheet, customerDetails.headerRow, now);
+    summary.copiedCustomers = customerSetup.copiedCustomers;
+    summary.updatedCustomers = customerSetup.updatedCustomers;
+    summary.generatedCustomerIds = customerSetup.generatedCustomerIds;
+    summary.generatedInviteCodes = customerSetup.generatedInviteCodes;
+    summary.inviteCodes = customerSetup.inviteCodes;
+
+    const reservationSheet = ensureSheetWithHeaders_(
+      targetSs,
+      CONFIG.BOOK_RESERVATIONS_SHEET_NAME,
+      BOOK_RESERVATION_HEADERS,
+      summary
+    );
+    if (migrateHistory) {
+      const historySetup = migrateLegacyReservationHistory_(
+        legacySs,
+        reservationSheet.sheet,
+        reservationSheet.headerRow,
+        customerSetup.customerIdByName,
+        now
+      );
+      summary.migratedReservationRows = historySetup.migratedReservationRows;
+      summary.skippedReservationSheets = historySetup.skippedReservationSheets;
+    } else {
+      summary.messages.push('Legacy customer-tab history migration skipped by option.');
+    }
+
+    summary.messages.push('Legacy Customer DB was read only and not modified.');
+    summary.messages.push('Public reserve behavior was not changed.');
+    return summary;
+  } catch (err) {
+    return reportError_('setupCustomerReservationSystem', err);
+  }
+}
+
 // ─────────────────────────────────────────────
 // Public API (called via google.script.run)
 // ─────────────────────────────────────────────
@@ -1056,6 +1196,469 @@ function changeAdminPassword(currentPassword, newPassword) {
 // ─────────────────────────────────────────────
 // Internal helpers
 // ─────────────────────────────────────────────
+
+function canRunSetup_(adminCredential) {
+  if (verifyAdminCredential_(adminCredential)) return true;
+  try {
+    const activeEmail = trim_(Session.getActiveUser().getEmail()).toLowerCase();
+    const effectiveEmail = trim_(Session.getEffectiveUser().getEmail()).toLowerCase();
+    return Boolean(activeEmail && effectiveEmail && activeEmail === effectiveEmail);
+  } catch (e) {
+    return false;
+  }
+}
+
+function ensureBooksReservationOwnerColumn_(ss) {
+  const sheet = ss.getSheetByName(CONFIG.MASTER_SHEET_NAME);
+  if (!sheet) throw new Error('Sheet "' + CONFIG.MASTER_SHEET_NAME + '" not found.');
+
+  const data = sheet.getDataRange().getValues();
+  let headerRow = -1;
+  for (let i = 0; i < data.length; i++) {
+    if (rowHasMasterHeaders_(data[i])) { headerRow = i; break; }
+  }
+  if (headerRow === -1) throw new Error('Could not find header row in "' + CONFIG.MASTER_SHEET_NAME + '".');
+
+  const added = ensureHeaderColumn_(sheet, headerRow, RESERVED_CUSTOMER_ID_HEADER);
+  return { sheet, headerRow, added };
+}
+
+function ensureSheetWithHeaders_(ss, sheetName, headers, summary) {
+  let sheet = ss.getSheetByName(sheetName);
+  let created = false;
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+    created = true;
+  }
+
+  if (created || sheet.getLastRow() === 0 || sheet.getLastColumn() === 0) {
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sheet.setFrozenRows(1);
+    if (summary) summary.createdSheets.push(sheetName);
+    return { sheet, headerRow: 0, columns: getHeaderMap_(headers) };
+  }
+
+  const data = sheet.getDataRange().getValues();
+  let headerRow = findHeaderRowByAnyHeader_(data, headers);
+  if (headerRow === -1) {
+    const firstRowBlank = data.length === 1 && data[0].every(value => !trim_(value));
+    if (!firstRowBlank) throw new Error('Could not find header row in "' + sheetName + '".');
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sheet.setFrozenRows(1);
+    return { sheet, headerRow: 0, columns: getHeaderMap_(headers) };
+  }
+
+  headers.forEach(header => {
+    const added = ensureHeaderColumn_(sheet, headerRow, header);
+    if (added && summary) summary.addedColumns.push(sheetName + ': ' + header);
+  });
+
+  const headerValues = sheet.getRange(headerRow + 1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  return { sheet, headerRow, columns: getHeaderMap_(headerValues) };
+}
+
+function ensureHeaderColumn_(sheet, headerRow, headerName) {
+  const width = Math.max(sheet.getLastColumn(), 1);
+  const headerValues = sheet.getRange(headerRow + 1, 1, 1, width).getValues()[0];
+  const normalized = headerValues.map(normalizeHeader_);
+  if (normalized.includes(normalizeHeader_(headerName))) return false;
+
+  const nextCol = sheet.getLastColumn() + 1;
+  sheet.getRange(headerRow + 1, nextCol).setValue(headerName);
+  return true;
+}
+
+function findHeaderRowByAnyHeader_(data, expectedHeaders) {
+  const expected = expectedHeaders.map(normalizeHeader_);
+  for (let i = 0; i < data.length; i++) {
+    const normalized = data[i].map(normalizeHeader_);
+    const matches = expected.filter(header => normalized.includes(header)).length;
+    if (matches >= Math.min(3, expected.length)) return i;
+  }
+  return -1;
+}
+
+function getHeaderMap_(headerRowValues) {
+  const map = {};
+  headerRowValues.forEach((header, index) => {
+    const normalized = normalizeHeader_(header);
+    if (normalized && map[normalized] == null) map[normalized] = index;
+  });
+  return map;
+}
+
+function getHeaderIndex_(headerMap, headerName) {
+  const idx = headerMap[normalizeHeader_(headerName)];
+  return idx == null ? -1 : idx;
+}
+
+function getHeaderIndexByAliases_(headerMap, aliases) {
+  for (const alias of aliases) {
+    const idx = getHeaderIndex_(headerMap, alias);
+    if (idx !== -1) return idx;
+  }
+  return -1;
+}
+
+function migrateLegacyCustomers_(legacySs, targetSheet, targetHeaderRow, now) {
+  const legacySheet = legacySs.getSheetByName(CONFIG.CUSTOMER_SHEET_NAME);
+  if (!legacySheet) throw new Error('Legacy sheet "' + CONFIG.CUSTOMER_SHEET_NAME + '" not found.');
+
+  const legacyData = legacySheet.getDataRange().getValues();
+  const legacyHeaderRow = findLegacyCustomerHeaderRow_(legacyData);
+  if (legacyHeaderRow === -1) throw new Error('Could not find header row in legacy Customer DB.');
+
+  const legacyHeaderMap = getHeaderMap_(legacyData[legacyHeaderRow]);
+  const legacyColumns = {
+    srNo: getHeaderIndexByAliases_(legacyHeaderMap, LEGACY_CUSTOMER_SOURCE_HEADERS.SR_NO),
+    name: getHeaderIndexByAliases_(legacyHeaderMap, LEGACY_CUSTOMER_SOURCE_HEADERS.NAME),
+    dateStart: getHeaderIndexByAliases_(legacyHeaderMap, LEGACY_CUSTOMER_SOURCE_HEADERS.DATE_START),
+    location: getHeaderIndexByAliases_(legacyHeaderMap, LEGACY_CUSTOMER_SOURCE_HEADERS.LOCATION),
+    address: getHeaderIndexByAliases_(legacyHeaderMap, LEGACY_CUSTOMER_SOURCE_HEADERS.ADDRESS),
+    status: getHeaderIndexByAliases_(legacyHeaderMap, LEGACY_CUSTOMER_SOURCE_HEADERS.STATUS),
+    tillDateSum: getHeaderIndexByAliases_(legacyHeaderMap, LEGACY_CUSTOMER_SOURCE_HEADERS.TILL_DATE_SUM)
+  };
+  if (legacyColumns.name === -1) throw new Error('Legacy Customer DB is missing the Name column.');
+
+  const targetHeaderValues = targetSheet.getRange(targetHeaderRow + 1, 1, 1, targetSheet.getLastColumn()).getValues()[0];
+  const targetHeaderMap = getHeaderMap_(targetHeaderValues);
+  const targetColumns = buildCustomerDetailsColumns_(targetHeaderMap);
+  const existing = readExistingCustomerDetails_(targetSheet, targetHeaderRow, targetColumns);
+
+  let copiedCustomers = 0;
+  let updatedCustomers = 0;
+  let generatedCustomerIds = 0;
+  let generatedInviteCodes = 0;
+  const inviteCodes = [];
+  const width = targetSheet.getLastColumn();
+
+  for (let i = legacyHeaderRow + 1; i < legacyData.length; i++) {
+    const sourceRow = legacyData[i];
+    const name = trim_(getRowValue_(sourceRow, legacyColumns.name));
+    if (!name) continue;
+
+    const legacySr = trim_(getRowValue_(sourceRow, legacyColumns.srNo));
+    const nameKey = normalizeCustomerNameKey_(name);
+    const rowRecord = (legacySr && existing.byLegacySr[legacySr]) || existing.byName[nameKey] || null;
+    const rowValues = rowRecord ? rowRecord.values.slice(0, width) : new Array(width).fill('');
+    while (rowValues.length < width) rowValues.push('');
+
+    setCustomerDetailValue_(rowValues, targetColumns.legacySrNo, legacySr);
+    setCustomerDetailValue_(rowValues, targetColumns.name, name);
+    setCustomerDetailValue_(rowValues, targetColumns.dateStart, getRowValue_(sourceRow, legacyColumns.dateStart));
+    setCustomerDetailValue_(rowValues, targetColumns.location, getRowValue_(sourceRow, legacyColumns.location));
+    setCustomerDetailValue_(rowValues, targetColumns.address, getRowValue_(sourceRow, legacyColumns.address));
+    setCustomerDetailValue_(rowValues, targetColumns.accountStatus, trim_(getRowValue_(sourceRow, legacyColumns.status)) || 'Active');
+    setCustomerDetailValue_(rowValues, targetColumns.tillDateSum, getRowValue_(sourceRow, legacyColumns.tillDateSum));
+    setDefaultCustomerDetailValue_(rowValues, targetColumns.subscriptionStatus, 'NA');
+    setDefaultCustomerDetailValue_(rowValues, targetColumns.authMethod, 'invite_pending');
+    setDefaultCustomerDetailValue_(rowValues, targetColumns.inviteStatus, 'Pending');
+    setDefaultCustomerDetailValue_(rowValues, targetColumns.createdAt, now);
+
+    let customerId = trim_(rowValues[targetColumns.customerId]);
+    if (!customerId) {
+      customerId = generateCustomerId_(name, existing.usedCustomerIds);
+      setCustomerDetailValue_(rowValues, targetColumns.customerId, customerId);
+      generatedCustomerIds++;
+    }
+    existing.usedCustomerIds[customerId] = true;
+
+    const inviteStatus = trim_(rowValues[targetColumns.inviteStatus]);
+    if (!trim_(rowValues[targetColumns.inviteCodeHash]) && inviteStatus !== 'Claimed') {
+      const inviteCode = generateInviteCode_();
+      setCustomerDetailValue_(rowValues, targetColumns.inviteCodeHash, hashInviteCode_(customerId, inviteCode));
+      setDefaultCustomerDetailValue_(rowValues, targetColumns.inviteStatus, 'Pending');
+      inviteCodes.push({ customerId, name, inviteCode });
+      generatedInviteCodes++;
+    }
+
+    if (rowRecord) {
+      targetSheet.getRange(rowRecord.rowNumber, 1, 1, width).setValues([rowValues.slice(0, width)]);
+      updatedCustomers++;
+    } else {
+      targetSheet.appendRow(rowValues.slice(0, width));
+      copiedCustomers++;
+    }
+
+    existing.customerIdByName[nameKey] = customerId;
+    if (legacySr) existing.byLegacySr[legacySr] = { rowNumber: rowRecord ? rowRecord.rowNumber : targetSheet.getLastRow(), values: rowValues };
+    existing.byName[nameKey] = { rowNumber: rowRecord ? rowRecord.rowNumber : targetSheet.getLastRow(), values: rowValues };
+  }
+
+  return {
+    copiedCustomers,
+    updatedCustomers,
+    generatedCustomerIds,
+    generatedInviteCodes,
+    inviteCodes,
+    customerIdByName: existing.customerIdByName
+  };
+}
+
+function findLegacyCustomerHeaderRow_(data) {
+  for (let i = 0; i < data.length; i++) {
+    const headerMap = getHeaderMap_(data[i]);
+    if (getHeaderIndexByAliases_(headerMap, LEGACY_CUSTOMER_SOURCE_HEADERS.NAME) !== -1) return i;
+  }
+  return -1;
+}
+
+function buildCustomerDetailsColumns_(headerMap) {
+  const columns = {
+    customerId: getHeaderIndex_(headerMap, 'Customer ID'),
+    legacySrNo: getHeaderIndex_(headerMap, 'Legacy Sr No'),
+    name: getHeaderIndex_(headerMap, 'Name'),
+    dateStart: getHeaderIndex_(headerMap, 'Date of Start'),
+    location: getHeaderIndex_(headerMap, 'Location'),
+    address: getHeaderIndex_(headerMap, 'Address'),
+    accountStatus: getHeaderIndex_(headerMap, 'Account Status'),
+    tillDateSum: getHeaderIndex_(headerMap, 'Till Date Sum'),
+    subscriptionStatus: getHeaderIndex_(headerMap, 'Subscription Status'),
+    authMethod: getHeaderIndex_(headerMap, 'Auth Method'),
+    inviteCodeHash: getHeaderIndex_(headerMap, 'Invite Code Hash'),
+    inviteStatus: getHeaderIndex_(headerMap, 'Invite Status'),
+    createdAt: getHeaderIndex_(headerMap, 'Created At')
+  };
+
+  Object.keys(columns).forEach(key => {
+    if (columns[key] === -1) throw new Error('Customer Details is missing required column: ' + key);
+  });
+  return columns;
+}
+
+function readExistingCustomerDetails_(sheet, headerRow, columns) {
+  const data = sheet.getDataRange().getValues();
+  const byLegacySr = {};
+  const byName = {};
+  const usedCustomerIds = {};
+  const customerIdByName = {};
+
+  for (let i = headerRow + 1; i < data.length; i++) {
+    const row = data[i];
+    const name = trim_(row[columns.name]);
+    if (!name) continue;
+
+    const rowNumber = i + 1;
+    const legacySr = trim_(row[columns.legacySrNo]);
+    const customerId = trim_(row[columns.customerId]);
+    const nameKey = normalizeCustomerNameKey_(name);
+    const record = { rowNumber, values: row };
+
+    if (legacySr) byLegacySr[legacySr] = record;
+    byName[nameKey] = record;
+    if (customerId) {
+      usedCustomerIds[customerId] = true;
+      customerIdByName[nameKey] = customerId;
+    }
+  }
+
+  return { byLegacySr, byName, usedCustomerIds, customerIdByName };
+}
+
+function setCustomerDetailValue_(rowValues, index, value) {
+  if (index !== -1) rowValues[index] = value == null ? '' : value;
+}
+
+function setDefaultCustomerDetailValue_(rowValues, index, value) {
+  if (index !== -1 && !trim_(rowValues[index])) rowValues[index] = value;
+}
+
+function getRowValue_(row, index) {
+  return index === -1 ? '' : row[index];
+}
+
+function generateCustomerId_(name, usedCustomerIds) {
+  const segments = customerIdNameSegments_(name);
+  for (let attempts = 0; attempts < 200; attempts++) {
+    const suffix = String(Math.floor(10000 + Math.random() * 90000));
+    const id = 'KFK-' + segments.first + '-' + segments.last + '-' + suffix;
+    if (!usedCustomerIds[id]) return id;
+  }
+  throw new Error('Could not generate a unique customer id for ' + name + '.');
+}
+
+function customerIdNameSegments_(name) {
+  const cleaned = trim_(name)
+    .toUpperCase()
+    .replace(/[^A-Z ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const parts = cleaned ? cleaned.split(' ') : [];
+  const first = (parts[0] || 'CUSTOMER').slice(0, 10);
+  const last = (parts.length > 1 ? parts[parts.length - 1] : 'CUSTOMER').slice(0, 10);
+  return { first, last };
+}
+
+function generateInviteCode_() {
+  const bytes = Utilities.getUuid().replace(/-/g, '').slice(0, 10).toUpperCase();
+  return 'KFK-' + bytes.slice(0, 5) + '-' + bytes.slice(5);
+}
+
+function hashInviteCode_(customerId, inviteCode) {
+  return sha256Hex_(String(customerId || '') + ':' + String(inviteCode || ''));
+}
+
+function sha256Hex_(value) {
+  const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, value, Utilities.Charset.UTF_8);
+  return bytes.map(byte => {
+    const unsigned = byte < 0 ? byte + 256 : byte;
+    return ('0' + unsigned.toString(16)).slice(-2);
+  }).join('');
+}
+
+function migrateLegacyReservationHistory_(legacySs, targetSheet, targetHeaderRow, customerIdByName, now) {
+  const targetHeaderValues = targetSheet.getRange(targetHeaderRow + 1, 1, 1, targetSheet.getLastColumn()).getValues()[0];
+  const targetHeaderMap = getHeaderMap_(targetHeaderValues);
+  const columns = buildBookReservationColumns_(targetHeaderMap);
+  const existingKeys = readExistingReservationMigrationKeys_(targetSheet, targetHeaderRow, columns);
+  const excludedNames = legacyMigrationExcludedSheetNames_();
+  const width = targetSheet.getLastColumn();
+
+  let migratedReservationRows = 0;
+  const skippedReservationSheets = [];
+
+  legacySs.getSheets().forEach(sheet => {
+    const sheetName = sheet.getName();
+    if (excludedNames[normalizeHeader_(sheetName)]) return;
+
+    const data = sheet.getDataRange().getValues();
+    const historyHeader = findLegacyHistoryHeader_(data);
+    if (!historyHeader) {
+      skippedReservationSheets.push(sheetName);
+      return;
+    }
+
+    const customerName = sheetName;
+    const customerId = customerIdByName[normalizeCustomerNameKey_(customerName)] || '';
+    const rowsToAppend = [];
+
+    for (let i = historyHeader.headerRow + 1; i < data.length; i++) {
+      const sourceRow = data[i];
+      const bookNo = trim_(getRowValue_(sourceRow, historyHeader.columns.bookNo));
+      const bookName = trim_(getRowValue_(sourceRow, historyHeader.columns.bookName));
+      if (!bookNo && !bookName) continue;
+
+      const migratedRow = i + 1;
+      const migrationKey = sheetName + '|' + migratedRow;
+      if (existingKeys[migrationKey]) continue;
+
+      const issuedAt = getRowValue_(sourceRow, historyHeader.columns.issuedAt);
+      const returnedAt = getRowValue_(sourceRow, historyHeader.columns.returnedAt);
+      const sourceStatus = trim_(getRowValue_(sourceRow, historyHeader.columns.status));
+      const status = sourceStatus || (returnedAt ? 'Returned' : 'Issued');
+      const reservationId = 'LEGACY-' + normalizeReservationIdPart_(sheetName) + '-' + migratedRow;
+      const rowValues = new Array(width).fill('');
+
+      rowValues[columns.reservationId] = reservationId;
+      rowValues[columns.customerId] = customerId;
+      rowValues[columns.customerName] = customerName;
+      rowValues[columns.bookNo] = bookNo;
+      rowValues[columns.bookName] = bookName;
+      rowValues[columns.source] = 'Legacy Customer Sheet';
+      rowValues[columns.issuedAt] = issuedAt || '';
+      rowValues[columns.returnedAt] = returnedAt || '';
+      rowValues[columns.reservationMonth] = formatReservationMonth_(issuedAt);
+      rowValues[columns.status] = status;
+      rowValues[columns.migratedFromSheet] = sheetName;
+      rowValues[columns.migratedRow] = migratedRow;
+      rowValues[columns.createdAt] = now;
+      rowValues[columns.updatedAt] = now;
+      rowsToAppend.push(rowValues);
+      existingKeys[migrationKey] = true;
+    }
+
+    if (rowsToAppend.length) {
+      targetSheet.getRange(targetSheet.getLastRow() + 1, 1, rowsToAppend.length, width)
+        .setValues(rowsToAppend);
+      migratedReservationRows += rowsToAppend.length;
+    }
+  });
+
+  return { migratedReservationRows, skippedReservationSheets };
+}
+
+function buildBookReservationColumns_(headerMap) {
+  const columns = {
+    reservationId: getHeaderIndex_(headerMap, 'Reservation ID'),
+    customerId: getHeaderIndex_(headerMap, 'Customer ID'),
+    customerName: getHeaderIndex_(headerMap, 'Customer Name'),
+    bookNo: getHeaderIndex_(headerMap, 'Book No'),
+    bookName: getHeaderIndex_(headerMap, 'Book Name'),
+    source: getHeaderIndex_(headerMap, 'Source'),
+    issuedAt: getHeaderIndex_(headerMap, 'Issued At'),
+    returnedAt: getHeaderIndex_(headerMap, 'Returned At'),
+    reservationMonth: getHeaderIndex_(headerMap, 'Reservation Month'),
+    status: getHeaderIndex_(headerMap, 'Status'),
+    migratedFromSheet: getHeaderIndex_(headerMap, 'Migrated From Sheet'),
+    migratedRow: getHeaderIndex_(headerMap, 'Migrated Row'),
+    createdAt: getHeaderIndex_(headerMap, 'Created At'),
+    updatedAt: getHeaderIndex_(headerMap, 'Updated At')
+  };
+
+  Object.keys(columns).forEach(key => {
+    if (columns[key] === -1) throw new Error('Book Reservations is missing required column: ' + key);
+  });
+  return columns;
+}
+
+function readExistingReservationMigrationKeys_(sheet, headerRow, columns) {
+  const data = sheet.getDataRange().getValues();
+  const keys = {};
+  for (let i = headerRow + 1; i < data.length; i++) {
+    const fromSheet = trim_(data[i][columns.migratedFromSheet]);
+    const fromRow = trim_(data[i][columns.migratedRow]);
+    if (fromSheet && fromRow) keys[fromSheet + '|' + fromRow] = true;
+  }
+  return keys;
+}
+
+function legacyMigrationExcludedSheetNames_() {
+  const names = [
+    CONFIG.MASTER_SHEET_NAME,
+    'Master DB',
+    CONFIG.CUSTOMER_SHEET_NAME,
+    CONFIG.CUSTOMER_DETAILS_SHEET_NAME,
+    CONFIG.BOOK_RESERVATIONS_SHEET_NAME
+  ];
+  const excluded = {};
+  names.forEach(name => { excluded[normalizeHeader_(name)] = true; });
+  return excluded;
+}
+
+function findLegacyHistoryHeader_(data) {
+  const maxRowsToInspect = Math.min(8, data.length);
+  for (let i = 0; i < maxRowsToInspect; i++) {
+    const headerMap = getHeaderMap_(data[i]);
+    const columns = {
+      bookNo: getHeaderIndexByAliases_(headerMap, ['BookNo', 'Book No']),
+      bookName: getHeaderIndexByAliases_(headerMap, ['Book', 'Book Name']),
+      issuedAt: getHeaderIndexByAliases_(headerMap, ['Date', 'Issued At', 'Issued Date']),
+      returnedAt: getHeaderIndexByAliases_(headerMap, ['Return date', 'Return Date', 'Returned At']),
+      status: getHeaderIndexByAliases_(headerMap, ['Status'])
+    };
+    if (columns.bookNo !== -1 && columns.bookName !== -1) {
+      return { headerRow: i, columns };
+    }
+  }
+  return null;
+}
+
+function normalizeCustomerNameKey_(name) {
+  return normalizeHeader_(name);
+}
+
+function normalizeReservationIdPart_(value) {
+  return normalizeHeader_(value).toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'SHEET';
+}
+
+function formatReservationMonth_(value) {
+  if (!value) return '';
+  try {
+    return Utilities.formatDate(new Date(value), Session.getScriptTimeZone(), 'yyyy-MM');
+  } catch (e) {
+    return '';
+  }
+}
 
 function getSheetAndHeader_() {
   const ss    = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
