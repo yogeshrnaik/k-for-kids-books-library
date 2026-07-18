@@ -739,6 +739,7 @@ let customerToken = localStorage.getItem('kfkCustomerToken') || '';
 let currentCustomer = null;
 let searchTimer  = null;
 let filters      = { language: '', ageGroup: '', status: '', search: '', withImage: false };
+let imageWarmupAttempted = false;
 
 const bookModal    = new bootstrap.Modal('#bookModal');
 const reserveModal = new bootstrap.Modal('#reserveModal');
@@ -790,6 +791,18 @@ function onBooksLoaded(result) {
   allBooks.sort((a, b) => (b.imageUrl ? 1 : 0) - (a.imageUrl ? 1 : 0));
   renderAgeGroupFilters();
   applyFilters();
+  maybeWarmImageCache();
+}
+
+function maybeWarmImageCache() {
+  if (imageWarmupAttempted || !allBooks.length || allBooks.some(book => book.imageUrl)) return;
+  imageWarmupAttempted = true;
+  google.script.run
+    .withSuccessHandler(res => {
+      if (res && res.success && res.imageCount > 0) loadBooks();
+    })
+    .withFailureHandler(() => {})
+    .warmImageCache();
 }
 
 // ════════════════════════════════════════════════

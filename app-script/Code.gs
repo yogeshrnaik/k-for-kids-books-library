@@ -797,6 +797,16 @@ function getBooks(filters, adminCredential, customerToken) {
   }
 }
 
+function warmImageCache() {
+  try {
+    const imageMap = getImageMap_();
+    invalidatePublicBooksCache_();
+    return { success: true, imageCount: Object.keys(imageMap).length };
+  } catch (err) {
+    return reportError_('warmImageCache', err);
+  }
+}
+
 function reserveBook(bookNo, subscriberName, phone, notes) {
   try {
     if (!checkRateLimit_('reserve-book', 5, 300)) {
