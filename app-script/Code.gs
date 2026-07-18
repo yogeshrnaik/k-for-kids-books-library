@@ -47,6 +47,7 @@ const MASTER_HEADERS = {
   IMAGE_NAME:  'Image Name'
 };
 
+const RESERVATION_ID_HEADER = 'Reservation ID';
 const RESERVED_CUSTOMER_ID_HEADER = 'Reserved Customer ID';
 
 // Column indices in Customer DB sheet (0-based)
@@ -668,7 +669,7 @@ function setupCustomerReservationSystem(adminCredential, options) {
     const legacySs = SpreadsheetApp.openById(CONFIG.LEGACY_SPREADSHEET_ID);
 
     const booksResult = ensureBooksReservationOwnerColumn_(targetSs);
-    if (booksResult.added) summary.addedColumns.push(CONFIG.MASTER_SHEET_NAME + ': ' + RESERVED_CUSTOMER_ID_HEADER);
+    if (booksResult.added) summary.addedColumns.push(CONFIG.MASTER_SHEET_NAME + ': reservation linkage columns');
 
     const customerDetails = ensureSheetWithHeaders_(
       targetSs,
@@ -759,9 +760,10 @@ function invalidatePublicBooksCache_() {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
-function getBooks(filters, adminCredential) {
+function getBooks(filters, adminCredential, customerToken) {
   try {
     const isAdmin = adminCredential ? verifyAdminCredential_(adminCredential) : false;
+    const currentCustomer = customerToken ? verifyCustomerSession_(customerToken) : null;
 
     // Serve public books from cache when possible (admin always bypasses cache)
     if (!isAdmin && !filters) {
@@ -770,6 +772,7 @@ function getBooks(filters, adminCredential) {
     }
 
     const { sheet, headerRow, columns } = getSheetAndHeader_();
+    const linkColumns = getExistingBookReservationLinkColumns_(sheet, headerRow);
     const range    = sheet.getDataRange();
     const data     = range.getValues();
     const displayData = range.getDisplayValues();
@@ -792,6 +795,9 @@ function getBooks(filters, adminCredential) {
       const reservedBy = trim_(displayRow[columns.RESERVED_BY]);
       const phone      = trim_(displayRow[columns.PHONE]);
       const notes      = trim_(displayRow[columns.NOTES]);
+      const reservationId = linkColumns.reservationId === -1 ? '' : trim_(displayRow[linkColumns.reservationId]);
+      const reservedCustomerId = linkColumns.reservedCustomerId === -1 ? '' : trim_(displayRow[linkColumns.reservedCustomerId]);
+      const isMyReservation = Boolean(currentCustomer && currentCustomer.customerId && reservedCustomerId === currentCustomer.customerId);
 
       let status = trim_(displayRow[columns.STATUS]);
       if (!status) status = issuedTo ? 'Issued' : 'Available';
@@ -820,7 +826,10 @@ function getBooks(filters, adminCredential) {
         reservedBy: isAdmin ? reservedBy : '',
         phone:      isAdmin ? phone       : '',
         issueDate:  isAdmin ? issueDate   : '',
-        notes:      isAdmin ? notes       : ''
+        notes:      isAdmin ? notes       : '',
+        reservationId: isAdmin || isMyReservation ? reservationId : '',
+        reservedCustomerId: isAdmin || isMyReservation ? reservedCustomerId : '',
+        isMyReservation
       });
     }
 
@@ -874,6 +883,128 @@ function reserveBook(bookNo, subscriberName, phone, notes) {
     return { success: false, error: 'Book not found.' };
   } catch (err) {
     return reportError_('reserveBook', err);
+  }
+}
+
+function reserveBookForCustomer(bookNo, customerToken) {
+  try {
+    if (!checkRateLimit_('customer-reserve-book', 8, 300)) {
+      return { success: false, error: 'Too many reservation attempts. Please try again later.' };
+    }
+
+    const customer = verifyCustomerSession_(customerToken);
+    if (!customer) return { success: false, error: 'Please log in to reserve a book.' };
+    if (trim_(customer.accountStatus).toLowerCase() !== 'active') {
+      return { success: false, error: 'Your account is not active yet. Please contact the library admin.' };
+    }
+
+    const monthlyLimit = parseMonthlyReservationLimit_(customer);
+    if (!monthlyLimit) {
+      return { success: false, error: 'Monthly reservation limit is not set for your account. Please contact the library admin.' };
+    }
+
+    const activeReservations = getActiveReservationsForCustomer_(customer.customerId);
+    if (activeReservations.length >= monthlyLimit) {
+      return {
+        success: false,
+        code: 'LIMIT_REACHED',
+        error: 'You already have ' + activeReservations.length + ' active reservation(s). Please unreserve one before reserving another book.',
+        monthlyLimit,
+        reservations: activeReservations
+      };
+    }
+
+    const { sheet, headerRow, columns } = getSheetAndHeader_();
+    const linkColumns = getBookReservationLinkColumns_(sheet, headerRow);
+    const data = sheet.getDataRange().getValues();
+    const now = new Date();
+
+    for (let i = headerRow + 1; i < data.length; i++) {
+      if (trim_(data[i][columns.BOOK_NO]) !== trim_(bookNo)) continue;
+
+      const status = trim_(data[i][columns.STATUS]);
+      const issuedTo = trim_(data[i][columns.ISSUED_TO]);
+      if (issuedTo || (status && status !== 'Available')) {
+        return { success: false, error: 'Sorry, this book is no longer available.' };
+      }
+
+      const r = i + 1;
+      const bookName = trim_(data[i][columns.BOOK_NAME]);
+      const reservationId = createReservationId_();
+      appendBookReservation_(reservationId, customer, trim_(bookNo), bookName, now);
+
+      sheet.getRange(r, columns.STATUS + 1).setValue('Reserved');
+      sheet.getRange(r, linkColumns.reservationId + 1).setValue(reservationId);
+      sheet.getRange(r, linkColumns.reservedCustomerId + 1).setValue(customer.customerId);
+      if (columns.RESERVED_BY != null) sheet.getRange(r, columns.RESERVED_BY + 1).setValue('');
+      if (columns.PHONE != null) sheet.getRange(r, columns.PHONE + 1).setValue('');
+      if (columns.NOTES != null) sheet.getRange(r, columns.NOTES + 1).setValue('');
+
+      invalidatePublicBooksCache_();
+      return {
+        success: true,
+        message: '✅ Book reserved for ' + customer.name + '.',
+        reservationId,
+        bookNo: trim_(bookNo),
+        status: 'Reserved'
+      };
+    }
+
+    return { success: false, error: 'Book not found.' };
+  } catch (err) {
+    return reportError_('reserveBookForCustomer', err);
+  }
+}
+
+function getMyReservations(customerToken) {
+  try {
+    const customer = verifyCustomerSession_(customerToken);
+    if (!customer) return { success: false, error: 'Please log in first.' };
+    return {
+      success: true,
+      monthlyLimit: parseMonthlyReservationLimit_(customer),
+      reservations: getActiveReservationsForCustomer_(customer.customerId)
+    };
+  } catch (err) {
+    return reportError_('getMyReservations', err);
+  }
+}
+
+function unreserveMyBook(reservationId, customerToken) {
+  try {
+    const customer = verifyCustomerSession_(customerToken);
+    if (!customer) return { success: false, error: 'Please log in first.' };
+    reservationId = trim_(reservationId);
+    if (!reservationId) return { success: false, error: 'Reservation ID is required.' };
+
+    const reservationContext = getBookReservationsSheetAndColumns_();
+    const reservationData = reservationContext.sheet.getDataRange().getValues();
+    const now = new Date();
+
+    for (let i = reservationContext.headerRow + 1; i < reservationData.length; i++) {
+      const row = reservationData[i];
+      if (trim_(row[reservationContext.columns.reservationId]) !== reservationId) continue;
+      if (trim_(row[reservationContext.columns.customerId]) !== customer.customerId) {
+        return { success: false, error: 'You can only unreserve your own books.' };
+      }
+      if (trim_(row[reservationContext.columns.status]) !== 'Reserved') {
+        return { success: false, error: 'This reservation is no longer active.' };
+      }
+
+      reservationContext.sheet.getRange(i + 1, reservationContext.columns.status + 1).setValue('Cancelled');
+      reservationContext.sheet.getRange(i + 1, reservationContext.columns.cancelledAt + 1).setValue(now);
+      reservationContext.sheet.getRange(i + 1, reservationContext.columns.cancelReason + 1).setValue('Customer self-unreserve');
+      reservationContext.sheet.getRange(i + 1, reservationContext.columns.updatedAt + 1).setValue(now);
+
+      const bookNo = trim_(row[reservationContext.columns.bookNo]);
+      clearBookReservationLink_(bookNo, reservationId);
+      invalidatePublicBooksCache_();
+      return { success: true, message: 'Reservation cancelled.', bookNo, reservationId };
+    }
+
+    return { success: false, error: 'Reservation not found.' };
+  } catch (err) {
+    return reportError_('unreserveMyBook', err);
   }
 }
 
@@ -1562,6 +1693,116 @@ function publicCustomerFromRow_(row, columns) {
   };
 }
 
+function parseMonthlyReservationLimit_(customer) {
+  const explicitLimit = parseInt(customer.monthlyReservationLimit, 10);
+  if (explicitLimit > 0) return explicitLimit;
+
+  const planMatch = trim_(customer.subscriptionPlan).match(/\d+/);
+  const planLimit = planMatch ? parseInt(planMatch[0], 10) : 0;
+  return planLimit > 0 ? planLimit : 0;
+}
+
+function getBookReservationsSheetAndColumns_() {
+  const ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+  const sheet = ss.getSheetByName(CONFIG.BOOK_RESERVATIONS_SHEET_NAME);
+  if (!sheet) throw new Error('Sheet "' + CONFIG.BOOK_RESERVATIONS_SHEET_NAME + '" not found. Run setupCustomerReservationSystem() first.');
+
+  const data = sheet.getDataRange().getValues();
+  const headerRow = findHeaderRowByAnyHeader_(data, BOOK_RESERVATION_HEADERS);
+  if (headerRow === -1) throw new Error('Could not find header row in "' + CONFIG.BOOK_RESERVATIONS_SHEET_NAME + '".');
+
+  const headerMap = getHeaderMap_(data[headerRow]);
+  return { sheet, headerRow, columns: buildBookReservationColumns_(headerMap) };
+}
+
+function getActiveReservationsForCustomer_(customerId) {
+  const context = getBookReservationsSheetAndColumns_();
+  const data = context.sheet.getDataRange().getDisplayValues();
+  const reservations = [];
+
+  for (let i = context.headerRow + 1; i < data.length; i++) {
+    const row = data[i];
+    if (trim_(row[context.columns.customerId]) !== customerId) continue;
+    if (trim_(row[context.columns.status]) !== 'Reserved') continue;
+
+    reservations.push({
+      reservationId: trim_(row[context.columns.reservationId]),
+      bookNo: trim_(row[context.columns.bookNo]),
+      bookName: trim_(row[context.columns.bookName]),
+      reservedAt: trim_(row[context.columns.reservedAt]),
+      status: trim_(row[context.columns.status])
+    });
+  }
+
+  return reservations;
+}
+
+function appendBookReservation_(reservationId, customer, bookNo, bookName, reservedAt) {
+  const context = getBookReservationsSheetAndColumns_();
+  const width = context.sheet.getLastColumn();
+  const row = new Array(width).fill('');
+
+  row[context.columns.reservationId] = reservationId;
+  row[context.columns.customerId] = customer.customerId;
+  row[context.columns.customerName] = customer.name;
+  row[context.columns.bookNo] = bookNo;
+  row[context.columns.bookName] = bookName;
+  row[context.columns.source] = 'Web App';
+  row[context.columns.reservedAt] = reservedAt;
+  row[context.columns.reservationMonth] = formatReservationMonth_(reservedAt);
+  row[context.columns.status] = 'Reserved';
+  row[context.columns.createdAt] = reservedAt;
+  row[context.columns.updatedAt] = reservedAt;
+
+  context.sheet.getRange(context.sheet.getLastRow() + 1, 1, 1, width).setValues([row]);
+}
+
+function createReservationId_() {
+  return 'RES-' + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyyMMddHHmmss') + '-' +
+    Utilities.getUuid().replace(/-/g, '').slice(0, 8).toUpperCase();
+}
+
+function getBookReservationLinkColumns_(sheet, headerRow) {
+  const reservationIdAdded = ensureHeaderColumn_(sheet, headerRow, RESERVATION_ID_HEADER);
+  const customerIdAdded = ensureHeaderColumn_(sheet, headerRow, RESERVED_CUSTOMER_ID_HEADER);
+  const headerValues = sheet.getRange(headerRow + 1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const headerMap = getHeaderMap_(headerValues);
+  return {
+    reservationId: getHeaderIndex_(headerMap, RESERVATION_ID_HEADER),
+    reservedCustomerId: getHeaderIndex_(headerMap, RESERVED_CUSTOMER_ID_HEADER),
+    added: reservationIdAdded || customerIdAdded
+  };
+}
+
+function getExistingBookReservationLinkColumns_(sheet, headerRow) {
+  const headerValues = sheet.getRange(headerRow + 1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const headerMap = getHeaderMap_(headerValues);
+  return {
+    reservationId: getHeaderIndex_(headerMap, RESERVATION_ID_HEADER),
+    reservedCustomerId: getHeaderIndex_(headerMap, RESERVED_CUSTOMER_ID_HEADER)
+  };
+}
+
+function clearBookReservationLink_(bookNo, reservationId) {
+  const { sheet, headerRow, columns } = getSheetAndHeader_();
+  const linkColumns = getBookReservationLinkColumns_(sheet, headerRow);
+  const data = sheet.getDataRange().getValues();
+
+  for (let i = headerRow + 1; i < data.length; i++) {
+    if (trim_(data[i][columns.BOOK_NO]) !== bookNo) continue;
+    if (trim_(data[i][linkColumns.reservationId]) && trim_(data[i][linkColumns.reservationId]) !== reservationId) return;
+
+    const r = i + 1;
+    sheet.getRange(r, columns.STATUS + 1).setValue('Available');
+    sheet.getRange(r, linkColumns.reservationId + 1).setValue('');
+    sheet.getRange(r, linkColumns.reservedCustomerId + 1).setValue('');
+    if (columns.RESERVED_BY != null) sheet.getRange(r, columns.RESERVED_BY + 1).setValue('');
+    if (columns.PHONE != null) sheet.getRange(r, columns.PHONE + 1).setValue('');
+    if (columns.NOTES != null) sheet.getRange(r, columns.NOTES + 1).setValue('');
+    return;
+  }
+}
+
 function ensureBooksReservationOwnerColumn_(ss) {
   const sheet = ss.getSheetByName(CONFIG.MASTER_SHEET_NAME);
   if (!sheet) throw new Error('Sheet "' + CONFIG.MASTER_SHEET_NAME + '" not found.');
@@ -1573,8 +1814,8 @@ function ensureBooksReservationOwnerColumn_(ss) {
   }
   if (headerRow === -1) throw new Error('Could not find header row in "' + CONFIG.MASTER_SHEET_NAME + '".');
 
-  const added = ensureHeaderColumn_(sheet, headerRow, RESERVED_CUSTOMER_ID_HEADER);
-  return { sheet, headerRow, added };
+  const linkColumns = getBookReservationLinkColumns_(sheet, headerRow);
+  return { sheet, headerRow, added: linkColumns.added };
 }
 
 function ensureSheetWithHeaders_(ss, sheetName, headers, summary) {
@@ -1939,10 +2180,13 @@ function buildBookReservationColumns_(headerMap) {
     bookNo: getHeaderIndex_(headerMap, 'Book No'),
     bookName: getHeaderIndex_(headerMap, 'Book Name'),
     source: getHeaderIndex_(headerMap, 'Source'),
+    reservedAt: getHeaderIndex_(headerMap, 'Reserved At'),
     issuedAt: getHeaderIndex_(headerMap, 'Issued At'),
     returnedAt: getHeaderIndex_(headerMap, 'Returned At'),
     reservationMonth: getHeaderIndex_(headerMap, 'Reservation Month'),
     status: getHeaderIndex_(headerMap, 'Status'),
+    cancelledAt: getHeaderIndex_(headerMap, 'Cancelled At'),
+    cancelReason: getHeaderIndex_(headerMap, 'Cancel Reason'),
     migratedFromSheet: getHeaderIndex_(headerMap, 'Migrated From Sheet'),
     migratedRow: getHeaderIndex_(headerMap, 'Migrated Row'),
     createdAt: getHeaderIndex_(headerMap, 'Created At'),

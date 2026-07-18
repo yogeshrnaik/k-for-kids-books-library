@@ -665,6 +665,27 @@
   </div>
 </div>
 
+<!-- ══════════════ RESERVATION LIMIT MODAL ══════════════ -->
+<div class="modal fade" id="limitModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-exclamation-circle me-2"></i>Reservation Limit Reached</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="small text-muted mb-3" id="limitMessage">
+          You have reached your monthly reservation limit. Unreserve one book to reserve this one.
+        </p>
+        <div id="limitReservationsList"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ══════════════ ADMIN ISSUE MODAL ══════════════ -->
 <div class="modal fade" id="issueModal" tabindex="-1">
   <div class="modal-dialog modal-dialog-centered">
@@ -723,6 +744,8 @@ const bookModal    = new bootstrap.Modal('#bookModal');
 const reserveModal = new bootstrap.Modal('#reserveModal');
 const issueModal   = new bootstrap.Modal('#issueModal');
 const customerAuthModal = new bootstrap.Modal('#customerAuthModal');
+const limitModal = new bootstrap.Modal('#limitModal');
+let pendingReserveBookNo = '';
 
 // ════════════════════════════════════════════════
 // Init
@@ -757,7 +780,7 @@ function loadBooks() {
   google.script.run
     .withSuccessHandler(onBooksLoaded)
     .withFailureHandler(onError)
-    .getBooks(null, adminToken);
+    .getBooks(null, adminToken, customerToken);
 }
 
 function onBooksLoaded(result) {
@@ -990,12 +1013,18 @@ function openBookDetail(bookNo) {
   // Footer actions
   const footer = document.getElementById('modalFooter');
   let reserveBtn = '';
+  let unreserveBtn = '';
   if (book.status === 'Available') {
-    reserveBtn = `<button class="btn btn-success" onclick="openReserve()">
+    reserveBtn = `<button class="btn btn-success" id="bookReserveBtn" onclick="openReserve()">
       <i class="bi bi-bookmark-plus me-1"></i>Reserve This Book
     </button>`;
   }
-  footer.innerHTML = `<button class="btn btn-secondary" data-bs-dismiss="modal">Close</button>${reserveBtn}`;
+  if (book.status === 'Reserved' && book.isMyReservation && book.reservationId) {
+    unreserveBtn = `<button class="btn btn-outline-danger" id="myUnreserveBtn" onclick="unreserveMyActiveBook('${escAttr(book.reservationId)}')">
+      <i class="bi bi-x-circle me-1"></i>Unreserve
+    </button>`;
+  }
+  footer.innerHTML = `<button class="btn btn-secondary" data-bs-dismiss="modal">Close</button>${unreserveBtn}${reserveBtn}`;
 
   bookModal.show();
 }
@@ -1032,6 +1061,12 @@ function buildAdminSection(book) {
 // ════════════════════════════════════════════════
 function openReserve() {
   if (!activeBook) return;
+  if (currentCustomer && customerToken) {
+    pendingReserveBookNo = activeBook.bookNo;
+    reserveLoggedInCustomer(activeBook.bookNo);
+    return;
+  }
+
   document.getElementById('reserveBookTitle').textContent = '📚 ' + activeBook.bookName + ' (' + activeBook.bookNo + ')';
   document.getElementById('rName').value  = '';
   document.getElementById('rPhone').value = '';
@@ -1067,6 +1102,102 @@ function submitReservation() {
       showToast('Something went wrong. Please try again.', 'danger');
     })
     .reserveBook(activeBook.bookNo, name, phone, notes);
+}
+
+function reserveLoggedInCustomer(bookNo) {
+  const btn = document.getElementById('bookReserveBtn');
+  setInlineButtonLoading(btn, true, 'Reserving…');
+  google.script.run
+    .withSuccessHandler(res => {
+      if (res.success) {
+        showToast(res.message || 'Book reserved.', 'success');
+        refreshBook(bookNo, 'Reserved', '', '', '');
+        bookModal.hide();
+      } else if (res.code === 'LIMIT_REACHED') {
+        setInlineButtonLoading(btn, false);
+        showReservationLimitModal(res);
+      } else {
+        setInlineButtonLoading(btn, false);
+        showToast(res.error || 'Reservation failed.', 'danger');
+      }
+    })
+    .withFailureHandler(() => {
+      setInlineButtonLoading(btn, false);
+      showToast('Something went wrong. Please try again.', 'danger');
+    })
+    .reserveBookForCustomer(bookNo, customerToken);
+}
+
+function showReservationLimitModal(res) {
+  const limit = res.monthlyLimit || 0;
+  const reservations = res.reservations || [];
+  const pendingBook = allBooks.find(book => book.bookNo === pendingReserveBookNo) || activeBook || {};
+  const pendingBookLabel = [
+    pendingBook.bookNo,
+    pendingBook.bookName,
+    pendingBook.language
+  ].filter(Boolean).join(' · ');
+  document.getElementById('limitMessage').textContent =
+    'Your monthly reservation limit is ' + limit + '. Unreserve one of these books to reserve ' + pendingBookLabel + '.';
+
+  document.getElementById('limitReservationsList').innerHTML = reservations.length
+    ? reservations.map(r => `<div class="border rounded p-2 mb-2 d-flex justify-content-between gap-2 align-items-center">
+        <div>
+          <div><b>${escHtml(r.bookName || r.bookNo)}</b></div>
+          <small class="text-muted">${escHtml(r.bookNo)}${r.reservedAt ? ' · Reserved ' + escHtml(r.reservedAt) : ''}</small>
+        </div>
+        <button class="btn btn-sm btn-outline-danger" id="limitUnreserve_${escAttr(r.reservationId)}" onclick="unreserveThenRetry('${escAttr(r.reservationId)}')">
+          Unreserve
+        </button>
+      </div>`).join('')
+    : '<div class="text-muted small">No active reservations were found. Please refresh and try again.</div>';
+
+  limitModal.show();
+}
+
+function unreserveThenRetry(reservationId) {
+  if (!reservationId || !pendingReserveBookNo) return;
+  const btn = document.getElementById('limitUnreserve_' + reservationId);
+  setInlineButtonLoading(btn, true, 'Unreserving…');
+  google.script.run
+    .withSuccessHandler(res => {
+      if (res.success) {
+        if (res.bookNo) refreshBook(res.bookNo, 'Available', '', '', '');
+        limitModal.hide();
+        reserveLoggedInCustomer(pendingReserveBookNo);
+      } else {
+        setInlineButtonLoading(btn, false);
+        showToast(res.error || 'Could not unreserve this book.', 'danger');
+      }
+    })
+    .withFailureHandler(() => {
+      setInlineButtonLoading(btn, false);
+      showToast('Something went wrong. Please try again.', 'danger');
+    })
+    .unreserveMyBook(reservationId, customerToken);
+}
+
+function unreserveMyActiveBook(reservationId) {
+  if (!reservationId) return;
+  const btn = document.getElementById('myUnreserveBtn');
+  setInlineButtonLoading(btn, true, 'Unreserving…');
+
+  google.script.run
+    .withSuccessHandler(res => {
+      if (res.success) {
+        showToast(res.message || 'Reservation cancelled.', 'success');
+        if (res.bookNo) refreshBook(res.bookNo, 'Available', '', '', '');
+        bookModal.hide();
+      } else {
+        setInlineButtonLoading(btn, false);
+        showToast(res.error || 'Could not unreserve this book.', 'danger');
+      }
+    })
+    .withFailureHandler(() => {
+      setInlineButtonLoading(btn, false);
+      showToast('Something went wrong. Please try again.', 'danger');
+    })
+    .unreserveMyBook(reservationId, customerToken);
 }
 
 // ════════════════════════════════════════════════
@@ -1267,6 +1398,7 @@ function handleCustomerAuthResponse(res) {
     localStorage.setItem('kfkCustomerToken', customerToken);
     customerAuthModal.hide();
     renderCustomerState();
+    loadBooks();
     showToast(res.message || 'Logged in.', 'success');
   } else {
     showToast((res && res.error) || 'Login failed.', 'danger');
@@ -1276,6 +1408,7 @@ function handleCustomerAuthResponse(res) {
 function logoutCustomer() {
   const token = customerToken;
   clearCustomerSession();
+  loadBooks();
   showToast('Logged out.', 'secondary');
   if (token) {
     google.script.run
@@ -1325,7 +1458,10 @@ function refreshBook(bookNo, status, issuedTo, phone, notes, issueDate = '') {
     reservedBy: status === 'Reserved' ? issuedTo : '',
     phone:      status === 'Reserved' ? phone    : '',
     issueDate:  status === 'Issued'   ? issueDate : '',
-    notes
+    notes,
+    reservationId: status === 'Reserved' ? allBooks[idx].reservationId : '',
+    reservedCustomerId: status === 'Reserved' ? allBooks[idx].reservedCustomerId : '',
+    isMyReservation: status === 'Reserved' ? allBooks[idx].isMyReservation : false
   };
   activeBook = allBooks[idx];
   applyFilters();
@@ -1431,6 +1567,15 @@ function setButtonLoading(modalId, loading) {
   btn.disabled = loading;
   btn.innerHTML = loading
     ? '<span class="spinner-border spinner-border-sm me-1"></span>Please wait…'
+    : btn.getAttribute('data-label') || btn.innerHTML;
+}
+
+function setInlineButtonLoading(btn, loading, label) {
+  if (!btn) return;
+  if (loading && !btn.getAttribute('data-label')) btn.setAttribute('data-label', btn.innerHTML);
+  btn.disabled = loading;
+  btn.innerHTML = loading
+    ? '<span class="spinner-border spinner-border-sm me-1"></span>' + escHtml(label || 'Please wait…')
     : btn.getAttribute('data-label') || btn.innerHTML;
 }
 
