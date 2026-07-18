@@ -6,15 +6,15 @@
 //   2. Project Settings > Script Properties > Add property:
 //        Key: ADMIN_PASSWORD   Value: (your password)
 //   3. Run setupImageNames() ONCE from the editor to populate
-//      the "Image Name" column in your Master DB sheet.
+//      the "Image Name" column in your Books-DB sheet.
 //   4. Deploy as Web App (Execute as: Me, Access: Anyone).
 // ============================================================
 
 const CONFIG = {
-  SPREADSHEET_ID: '1hPnGg26eaRplb-4hQWLyZcJ7pK3hBiJeqfVKdFR9hM0',
+  SPREADSHEET_ID: '18nnveeE4RC9ah5zRQuOOzRJJnyOi8EPN8hrDELNgbFY',
 
   // Tab name in your spreadsheet that holds the book list
-  MASTER_SHEET_NAME: 'Master DB',
+  MASTER_SHEET_NAME: 'Books-DB',
 
   // Google Drive folder IDs containing book cover images
   IMAGE_FOLDER_IDS: [
@@ -25,7 +25,7 @@ const CONFIG = {
   CUSTOMER_SHEET_NAME: 'Customer DB'
 };
 
-// Header names in the Master DB sheet. Code resolves these to column positions
+// Header names in the book source sheet. Code resolves these to column positions
 // at runtime so sheet columns can be referenced by name instead of fixed indexes.
 const MASTER_HEADERS = {
   SR_NO:       'Sr. No.',
@@ -517,7 +517,7 @@ function doGet(e) {
 
 // ─────────────────────────────────────────────
 // ONE-TIME SETUP: Run this from the Apps Script editor
-// to write the "Image Name" column into your Master DB sheet.
+// to write the "Image Name" column into your book source sheet.
 // ─────────────────────────────────────────────
 
 function setupImageNames() {
@@ -1106,7 +1106,7 @@ function getMasterColumnMap_(headerRowValues) {
   });
 
   if (missingHeaders.length) {
-    throw new Error('Missing Master DB column(s): ' + missingHeaders.join(', '));
+    throw new Error('Missing book source column(s): ' + missingHeaders.join(', '));
   }
 
   return columns;
