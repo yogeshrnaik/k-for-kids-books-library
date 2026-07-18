@@ -117,7 +117,6 @@
     top: 0; left: 0;
     width: 100%; height: 100%;
     object-fit: cover;
-    loading: lazy;
   }
   .book-img-placeholder {
     position: absolute;
@@ -156,6 +155,7 @@
     font-weight: 600;
     color: #222;
     line-height: 1.3;
+    line-clamp: 2;
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
@@ -289,6 +289,8 @@
   .admin-bar input { max-width: 180px; font-size: .82rem; }
   .admin-bar .btn  { font-size: .82rem; }
   .admin-mode-badge { background: var(--accent); color: #fff; border-radius: 20px; padding: 2px 12px; font-size: .78rem; font-weight: 700; }
+  .customer-auth { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .customer-chip { background: rgba(255,255,255,.16); color: #fff; border-radius: 20px; padding: 3px 10px; font-size: .78rem; font-weight: 600; }
 
   /* ── Admin tab bar ── */
   .admin-tab-bar {
@@ -349,9 +351,18 @@
     <h1><i class="bi bi-book-half me-2"></i>K for Kids Library</h1>
     <div class="subtitle">Browse · Reserve · Borrow</div>
   </div>
-  <button class="btn btn-sm btn-outline-light" onclick="toggleAdminBar()" title="Admin">
-    <i class="bi bi-shield-lock"></i>
-  </button>
+  <div class="customer-auth">
+    <span id="customerChip" class="customer-chip" style="display:none"></span>
+    <button id="customerLoginBtn" class="btn btn-sm btn-light" onclick="openCustomerAuth()" title="Customer login">
+      <i class="bi bi-person-circle me-1"></i>Login
+    </button>
+    <button id="customerLogoutBtn" class="btn btn-sm btn-outline-light" onclick="logoutCustomer()" style="display:none">
+      Logout
+    </button>
+    <button class="btn btn-sm btn-outline-light" onclick="toggleAdminBar()" title="Admin">
+      <i class="bi bi-shield-lock"></i>
+    </button>
+  </div>
 </header>
 
 <!-- ══════════════ ADMIN LOGIN BAR ══════════════ -->
@@ -535,6 +546,74 @@
 
 </div>
 
+<!-- ══════════════ CUSTOMER AUTH MODAL ══════════════ -->
+<div class="modal fade" id="customerAuthModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-person-circle me-2"></i>Customer Login</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <ul class="nav nav-tabs mb-3" role="tablist">
+          <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="login-tab" data-bs-toggle="tab" data-bs-target="#loginPane" type="button" role="tab">Login</button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" id="claim-tab" data-bs-toggle="tab" data-bs-target="#claimPane" type="button" role="tab">Join with Invite Code</button>
+          </li>
+        </ul>
+        <div class="tab-content">
+          <div class="tab-pane fade show active" id="loginPane" role="tabpanel" aria-labelledby="login-tab">
+            <div class="mb-3">
+              <label class="form-label">Email or Phone</label>
+              <input type="text" id="loginIdentifier" class="form-control" autocomplete="username" placeholder="Email address or phone number">
+            </div>
+            <div class="mb-2">
+              <label class="form-label">Password</label>
+              <input type="password" id="loginPassword" class="form-control" autocomplete="current-password"
+                     onkeydown="if(event.key==='Enter') loginCustomer()">
+            </div>
+          </div>
+          <div class="tab-pane fade" id="claimPane" role="tabpanel" aria-labelledby="claim-tab">
+            <div class="alert alert-info py-2 small">
+              Use the Customer ID and invite code shared by the admin, then add an email or phone number and create a password.
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Customer ID</label>
+              <input type="text" id="claimCustomerId" class="form-control" placeholder="KFK-FIRST-LAST-12345" autocomplete="off">
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Invite Code</label>
+              <input type="text" id="claimInviteCode" class="form-control" placeholder="KFK-XXXXX-XXXXX" autocomplete="one-time-code">
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Email <span class="text-muted">(email or phone required)</span></label>
+              <input type="email" id="claimEmail" class="form-control" autocomplete="email">
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Phone <span class="text-muted">(email or phone required)</span></label>
+              <input type="tel" id="claimPhone" class="form-control" autocomplete="tel">
+            </div>
+            <div class="mb-2">
+              <label class="form-label">Create Password</label>
+              <input type="password" id="claimPassword" class="form-control" autocomplete="new-password"
+                     onkeydown="if(event.key==='Enter') claimExistingCustomer()">
+              <div class="form-text">Use at least 8 characters.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-success" id="customerAuthSubmitBtn" onclick="submitCustomerAuth()">
+          Continue
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ══════════════ BOOK DETAIL MODAL ══════════════ -->
 <div class="modal fade" id="bookModal" tabindex="-1">
   <div class="modal-dialog modal-dialog-centered">
@@ -635,12 +714,15 @@ let filtered     = [];
 let activeBook   = null;
 let adminMode    = false;
 let adminToken   = '';
+let customerToken = localStorage.getItem('kfkCustomerToken') || '';
+let currentCustomer = null;
 let searchTimer  = null;
 let filters      = { language: '', ageGroup: '', status: '', search: '', withImage: false };
 
 const bookModal    = new bootstrap.Modal('#bookModal');
 const reserveModal = new bootstrap.Modal('#reserveModal');
 const issueModal   = new bootstrap.Modal('#issueModal');
+const customerAuthModal = new bootstrap.Modal('#customerAuthModal');
 
 // ════════════════════════════════════════════════
 // Init
@@ -649,6 +731,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Set today as default date in admin date picker
   const today = new Date().toISOString().split('T')[0];
   document.getElementById('iDate').value = today;
+  restoreCustomerSession();
   loadBooks();
 
   document.getElementById('booksGrid').addEventListener('click', event => {
@@ -1103,6 +1186,130 @@ function logoutAdmin() {
 }
 
 // ════════════════════════════════════════════════
+// Customer login / claim
+// ════════════════════════════════════════════════
+function restoreCustomerSession() {
+  renderCustomerState();
+  if (!customerToken) return;
+
+  google.script.run
+    .withSuccessHandler(res => {
+      if (res && res.success && res.customer) {
+        currentCustomer = res.customer;
+        renderCustomerState();
+      } else {
+        clearCustomerSession();
+      }
+    })
+    .withFailureHandler(() => clearCustomerSession())
+    .getCurrentCustomer(customerToken);
+}
+
+function openCustomerAuth() {
+  document.getElementById('loginIdentifier').value = currentCustomer ? (currentCustomer.email || currentCustomer.phone) : '';
+  document.getElementById('loginPassword').value = '';
+  document.getElementById('claimCustomerId').value = '';
+  document.getElementById('claimInviteCode').value = '';
+  document.getElementById('claimEmail').value = '';
+  document.getElementById('claimPhone').value = '';
+  document.getElementById('claimPassword').value = '';
+  customerAuthModal.show();
+}
+
+function submitCustomerAuth() {
+  const claimActive = document.getElementById('claimPane').classList.contains('active');
+  if (claimActive) claimExistingCustomer();
+  else loginCustomer();
+}
+
+function loginCustomer() {
+  const identifier = document.getElementById('loginIdentifier').value.trim();
+  const password = document.getElementById('loginPassword').value;
+  if (!identifier || !password) { showToast('Email or phone and password are required.', 'warning'); return; }
+
+  setButtonLoading('customerAuthModal', true);
+  google.script.run
+    .withSuccessHandler(res => handleCustomerAuthResponse(res))
+    .withFailureHandler(() => {
+      setButtonLoading('customerAuthModal', false);
+      showToast('Something went wrong. Please try again.', 'danger');
+    })
+    .loginCustomer(identifier, password);
+}
+
+function claimExistingCustomer() {
+  const customerId = document.getElementById('claimCustomerId').value.trim();
+  const inviteCode = document.getElementById('claimInviteCode').value.trim();
+  const email = document.getElementById('claimEmail').value.trim();
+  const phone = document.getElementById('claimPhone').value.trim();
+  const password = document.getElementById('claimPassword').value;
+
+  if (!customerId || !inviteCode || (!email && !phone) || !password) {
+    showToast('Customer ID, invite code, email or phone, and password are required.', 'warning');
+    return;
+  }
+
+  setButtonLoading('customerAuthModal', true);
+  google.script.run
+    .withSuccessHandler(res => handleCustomerAuthResponse(res))
+    .withFailureHandler(() => {
+      setButtonLoading('customerAuthModal', false);
+      showToast('Something went wrong. Please try again.', 'danger');
+    })
+    .claimExistingCustomer(customerId, inviteCode, email, password, phone);
+}
+
+function handleCustomerAuthResponse(res) {
+  setButtonLoading('customerAuthModal', false);
+  if (res && res.success && res.token && res.customer) {
+    customerToken = res.token;
+    currentCustomer = res.customer;
+    localStorage.setItem('kfkCustomerToken', customerToken);
+    customerAuthModal.hide();
+    renderCustomerState();
+    showToast(res.message || 'Logged in.', 'success');
+  } else {
+    showToast((res && res.error) || 'Login failed.', 'danger');
+  }
+}
+
+function logoutCustomer() {
+  const token = customerToken;
+  clearCustomerSession();
+  showToast('Logged out.', 'secondary');
+  if (token) {
+    google.script.run
+      .withFailureHandler(() => {})
+      .logoutCustomer(token);
+  }
+}
+
+function clearCustomerSession() {
+  customerToken = '';
+  currentCustomer = null;
+  localStorage.removeItem('kfkCustomerToken');
+  renderCustomerState();
+}
+
+function renderCustomerState() {
+  const chip = document.getElementById('customerChip');
+  const loginBtn = document.getElementById('customerLoginBtn');
+  const logoutBtn = document.getElementById('customerLogoutBtn');
+
+  if (currentCustomer) {
+    chip.textContent = currentCustomer.name || currentCustomer.email || currentCustomer.customerId;
+    chip.style.display = '';
+    loginBtn.style.display = 'none';
+    logoutBtn.style.display = '';
+  } else {
+    chip.textContent = '';
+    chip.style.display = 'none';
+    loginBtn.style.display = '';
+    logoutBtn.style.display = 'none';
+  }
+}
+
+// ════════════════════════════════════════════════
 // Helpers
 // ════════════════════════════════════════════════
 
@@ -1220,6 +1427,7 @@ function setButtonLoading(modalId, loading) {
   const modal = document.getElementById(modalId);
   const btn   = modal.querySelector('.modal-footer .btn:last-child');
   if (!btn) return;
+  if (loading && !btn.getAttribute('data-label')) btn.setAttribute('data-label', btn.innerHTML);
   btn.disabled = loading;
   btn.innerHTML = loading
     ? '<span class="spinner-border spinner-border-sm me-1"></span>Please wait…'

@@ -721,6 +721,7 @@ const IMAGE_CACHE_KEY   = 'BOOK_IMAGE_MAP_MASTER_HEADERS_V2';
 const BOOKS_CACHE_SECS  = 300; // 5 minutes
 const CHUNK_SIZE        = 90000; // bytes per CacheService entry (limit 100 KB)
 const ADMIN_SESSION_SECS = 7200; // 2 hours
+const CUSTOMER_SESSION_SECS = 21600; // 6 hours, CacheService max TTL
 
 function getCachedPublicBooks_() {
   const cache  = CacheService.getScriptCache();
@@ -969,6 +970,215 @@ function cancelReservation(bookNo, adminCredential) {
 }
 
 // ─────────────────────────────────────────────
+// Customer Auth (Phase 2)
+// ─────────────────────────────────────────────
+
+function claimExistingCustomer(customerId, inviteCode, email, password, phone) {
+  try {
+    if (!checkRateLimit_('customer-claim', 8, 300)) {
+      return { success: false, error: 'Too many claim attempts. Please try again later.' };
+    }
+
+    customerId = trim_(customerId).toUpperCase();
+    inviteCode = trim_(inviteCode).toUpperCase();
+    email = normalizeEmail_(email);
+    phone = normalizePhone_(phone);
+
+    const validation = validateCustomerAuthInputs_(email, phone, password);
+    if (!customerId || !inviteCode) return { success: false, error: 'Customer ID and invite code are required.' };
+    if (!validation.success) return validation;
+
+    const details = getCustomerDetailsSheetAndColumns_();
+    const data = details.sheet.getDataRange().getValues();
+    const rowInfo = findCustomerDetailsRow_(data, details.headerRow, details.columns, { customerId });
+    if (!rowInfo) return { success: false, error: 'Customer account not found.' };
+
+    const row = rowInfo.values.slice();
+    const inviteStatus = trim_(row[details.columns.inviteStatus]);
+    if (inviteStatus === 'Claimed' || trim_(row[details.columns.claimedAt])) {
+      return { success: false, error: 'This account has already been claimed. Please log in.' };
+    }
+
+    const storedInviteHash = trim_(row[details.columns.inviteCodeHash]);
+    if (!storedInviteHash || storedInviteHash !== hashInviteCode_(customerId, inviteCode)) {
+      return { success: false, error: 'Invalid customer ID or invite code.' };
+    }
+
+    const existingEmailRow = email ? findCustomerDetailsRow_(data, details.headerRow, details.columns, { email }) : null;
+    if (existingEmailRow && existingEmailRow.rowNumber !== rowInfo.rowNumber) {
+      return { success: false, error: 'This email is already linked to another customer.' };
+    }
+    const existingPhoneRow = phone ? findCustomerDetailsRow_(data, details.headerRow, details.columns, { phone }) : null;
+    if (existingPhoneRow && existingPhoneRow.rowNumber !== rowInfo.rowNumber) {
+      return { success: false, error: 'This phone number is already linked to another customer.' };
+    }
+
+    const now = new Date();
+    const salt = Utilities.getUuid();
+    row[details.columns.email] = email;
+    if (details.columns.phone !== -1) row[details.columns.phone] = phone;
+    row[details.columns.authMethod] = 'password';
+    row[details.columns.passwordSalt] = salt;
+    row[details.columns.passwordHash] = hashPassword_(password, salt);
+    row[details.columns.inviteCodeHash] = '';
+    if (details.columns.inviteCodeExpiresAt !== -1) row[details.columns.inviteCodeExpiresAt] = '';
+    row[details.columns.inviteStatus] = 'Claimed';
+    row[details.columns.claimedAt] = now;
+    row[details.columns.lastLoginAt] = now;
+
+    writeCustomerDetailsRow_(details.sheet, rowInfo.rowNumber, row);
+
+    const token = createCustomerSession_(row, details.columns);
+    return { success: true, token, customer: publicCustomerFromRow_(row, details.columns), message: 'Account claimed successfully.' };
+  } catch (err) {
+    return reportError_('claimExistingCustomer', err);
+  }
+}
+
+function loginCustomer(identifier, password) {
+  try {
+    if (!checkRateLimit_('customer-login', 10, 300)) {
+      return { success: false, error: 'Too many login attempts. Please try again later.' };
+    }
+
+    const loginId = trim_(identifier);
+    if (!loginId || !password) return { success: false, error: 'Email or phone and password are required.' };
+
+    const details = getCustomerDetailsSheetAndColumns_();
+    const data = details.sheet.getDataRange().getValues();
+    const rowInfo = findCustomerDetailsRow_(data, details.headerRow, details.columns, loginQueryFromIdentifier_(loginId));
+    if (!rowInfo) return { success: false, error: 'Invalid email/phone or password.' };
+
+    const row = rowInfo.values.slice();
+    const authMethod = trim_(row[details.columns.authMethod]);
+    const salt = trim_(row[details.columns.passwordSalt]);
+    const passwordHash = trim_(row[details.columns.passwordHash]);
+    const hasPasswordLogin = authMethod === 'password' || authMethod === 'both';
+    if (!hasPasswordLogin || !salt || !passwordHash || hashPassword_(password, salt) !== passwordHash) {
+      return { success: false, error: 'Invalid email/phone or password.' };
+    }
+
+    row[details.columns.lastLoginAt] = new Date();
+    writeCustomerDetailsRow_(details.sheet, rowInfo.rowNumber, row);
+
+    const token = createCustomerSession_(row, details.columns);
+    return { success: true, token, customer: publicCustomerFromRow_(row, details.columns), message: 'Logged in successfully.' };
+  } catch (err) {
+    return reportError_('loginCustomer', err);
+  }
+}
+
+function logoutCustomer(token) {
+  try {
+    if (token) CacheService.getScriptCache().remove(customerSessionKey_(token));
+  } catch (err) {
+    Logger.log('logoutCustomer error: ' + err.message);
+  }
+  return { success: true };
+}
+
+function getCurrentCustomer(token) {
+  try {
+    const session = verifyCustomerSession_(token);
+    if (!session) return { success: false, error: 'Not logged in.' };
+    return { success: true, customer: session };
+  } catch (err) {
+    return reportError_('getCurrentCustomer', err);
+  }
+}
+
+function generateInviteCodeForCustomer(customerId, adminCredential) {
+  try {
+    if (!canRunSetup_(adminCredential)) {
+      return { success: false, error: 'Invite code generation is restricted to the spreadsheet owner or an active admin session.' };
+    }
+
+    customerId = trim_(customerId).toUpperCase();
+    if (!customerId) return { success: false, error: 'Customer ID is required.' };
+
+    const details = getCustomerDetailsSheetAndColumns_();
+    const data = details.sheet.getDataRange().getValues();
+    const rowInfo = findCustomerDetailsRow_(data, details.headerRow, details.columns, { customerId });
+    if (!rowInfo) return { success: false, error: 'Customer account not found.' };
+
+    const row = rowInfo.values.slice();
+    const claimed = trim_(row[details.columns.claimedAt]) || trim_(row[details.columns.inviteStatus]) === 'Claimed';
+    if (claimed) {
+      return { success: false, error: 'This account is already claimed. Invite code was not regenerated.' };
+    }
+
+    const inviteCode = generateInviteCode_();
+    row[details.columns.inviteCodeHash] = hashInviteCode_(customerId, inviteCode);
+    if (details.columns.inviteCodeExpiresAt !== -1) row[details.columns.inviteCodeExpiresAt] = '';
+    row[details.columns.inviteStatus] = 'Regenerated';
+    row[details.columns.authMethod] = 'invite_pending';
+    writeCustomerDetailsRow_(details.sheet, rowInfo.rowNumber, row);
+
+    const message = 'Invite code for ' + customerId + ' (' + trim_(row[details.columns.name]) + '): ' + inviteCode;
+    Logger.log(message);
+    return { success: true, customerId, name: trim_(row[details.columns.name]), inviteCode, message };
+  } catch (err) {
+    return reportError_('generateInviteCodeForCustomer', err);
+  }
+}
+
+function generateInviteCodesForAllCustomers(adminCredential) {
+  try {
+    if (!canRunSetup_(adminCredential)) {
+      return { success: false, error: 'Invite code generation is restricted to the spreadsheet owner or an active admin session.' };
+    }
+
+    const details = getCustomerDetailsSheetAndColumns_();
+    const data = details.sheet.getDataRange().getValues();
+    const width = details.sheet.getLastColumn();
+    const generated = [];
+    const skippedClaimed = [];
+    const skippedMissingId = [];
+
+    for (let i = details.headerRow + 1; i < data.length; i++) {
+      const row = data[i].slice(0, width);
+      while (row.length < width) row.push('');
+
+      const customerId = trim_(row[details.columns.customerId]).toUpperCase();
+      const name = trim_(row[details.columns.name]);
+      if (!customerId && !name) continue;
+      if (!customerId) {
+        skippedMissingId.push({ rowNumber: i + 1, name });
+        continue;
+      }
+
+      const claimed = trim_(row[details.columns.claimedAt]) || trim_(row[details.columns.inviteStatus]) === 'Claimed';
+      if (claimed) {
+        skippedClaimed.push({ customerId, name });
+        continue;
+      }
+
+      const inviteCode = generateInviteCode_();
+      row[details.columns.inviteCodeHash] = hashInviteCode_(customerId, inviteCode);
+      if (details.columns.inviteCodeExpiresAt !== -1) row[details.columns.inviteCodeExpiresAt] = '';
+      row[details.columns.inviteStatus] = 'Regenerated';
+      row[details.columns.authMethod] = 'invite_pending';
+      details.sheet.getRange(i + 1, 1, 1, width).setValues([row]);
+
+      const entry = { customerId, name, inviteCode };
+      generated.push(entry);
+      Logger.log('Invite code for ' + customerId + ' (' + name + '): ' + inviteCode);
+    }
+
+    Logger.log('Generated invite codes for ' + generated.length + ' customer(s). Skipped claimed: ' + skippedClaimed.length + '. Missing customer id: ' + skippedMissingId.length + '.');
+    return {
+      success: true,
+      generated,
+      skippedClaimed,
+      skippedMissingId,
+      message: 'Generated invite codes for ' + generated.length + ' customer(s).'
+    };
+  } catch (err) {
+    return reportError_('generateInviteCodesForAllCustomers', err);
+  }
+}
+
+// ─────────────────────────────────────────────
 // Customer Management (Admin only)
 // ─────────────────────────────────────────────
 
@@ -1206,6 +1416,150 @@ function canRunSetup_(adminCredential) {
   } catch (e) {
     return false;
   }
+}
+
+function getCustomerDetailsSheetAndColumns_() {
+  const ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+  const sheet = ss.getSheetByName(CONFIG.CUSTOMER_DETAILS_SHEET_NAME);
+  if (!sheet) throw new Error('Sheet "' + CONFIG.CUSTOMER_DETAILS_SHEET_NAME + '" not found. Run setupCustomerReservationSystem() first.');
+
+  const data = sheet.getDataRange().getValues();
+  const headerRow = findHeaderRowByAnyHeader_(data, CUSTOMER_DETAILS_HEADERS);
+  if (headerRow === -1) throw new Error('Could not find header row in "' + CONFIG.CUSTOMER_DETAILS_SHEET_NAME + '".');
+
+  const headerMap = getHeaderMap_(data[headerRow]);
+  return { sheet, headerRow, columns: buildCustomerAuthColumns_(headerMap) };
+}
+
+function buildCustomerAuthColumns_(headerMap) {
+  const columns = {
+    customerId: getHeaderIndex_(headerMap, 'Customer ID'),
+    name: getHeaderIndex_(headerMap, 'Name'),
+    accountStatus: getHeaderIndex_(headerMap, 'Account Status'),
+    email: getHeaderIndex_(headerMap, 'Email'),
+    phone: getHeaderIndex_(headerMap, 'Phone'),
+    subscriptionPlan: getHeaderIndex_(headerMap, 'Subscription Plan'),
+    monthlyReservationLimit: getHeaderIndex_(headerMap, 'Monthly Reservation Limit'),
+    subscriptionStatus: getHeaderIndex_(headerMap, 'Subscription Status'),
+    authMethod: getHeaderIndex_(headerMap, 'Auth Method'),
+    passwordSalt: getHeaderIndex_(headerMap, 'Password Salt'),
+    passwordHash: getHeaderIndex_(headerMap, 'Password Hash'),
+    inviteCodeHash: getHeaderIndex_(headerMap, 'Invite Code Hash'),
+    inviteCodeExpiresAt: getHeaderIndex_(headerMap, 'Invite Code Expires At'),
+    inviteStatus: getHeaderIndex_(headerMap, 'Invite Status'),
+    claimedAt: getHeaderIndex_(headerMap, 'Claimed At'),
+    lastLoginAt: getHeaderIndex_(headerMap, 'Last Login At')
+  };
+
+  Object.keys(columns).forEach(key => {
+    if (columns[key] === -1 && key !== 'phone' && key !== 'subscriptionPlan' && key !== 'monthlyReservationLimit' && key !== 'inviteCodeExpiresAt') {
+      throw new Error('Customer Details is missing required auth column: ' + key);
+    }
+  });
+  return columns;
+}
+
+function findCustomerDetailsRow_(data, headerRow, columns, query) {
+  const customerId = trim_(query.customerId).toUpperCase();
+  const email = normalizeEmail_(query.email);
+  const phone = normalizePhone_(query.phone);
+
+  for (let i = headerRow + 1; i < data.length; i++) {
+    const row = data[i];
+    if (customerId && trim_(row[columns.customerId]).toUpperCase() === customerId) {
+      return { rowNumber: i + 1, values: row };
+    }
+    if (email && normalizeEmail_(row[columns.email]) === email) {
+      return { rowNumber: i + 1, values: row };
+    }
+    if (phone && columns.phone !== -1 && normalizePhone_(row[columns.phone]) === phone) {
+      return { rowNumber: i + 1, values: row };
+    }
+  }
+  return null;
+}
+
+function writeCustomerDetailsRow_(sheet, rowNumber, rowValues) {
+  const width = sheet.getLastColumn();
+  const values = rowValues.slice(0, width);
+  while (values.length < width) values.push('');
+  sheet.getRange(rowNumber, 1, 1, width).setValues([values]);
+}
+
+function validateCustomerAuthInputs_(email, phone, password) {
+  if (!email && !phone) {
+    return { success: false, error: 'Please enter either an email address or phone number.' };
+  }
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return { success: false, error: 'Please enter a valid email address.' };
+  }
+  if (phone && phone.length < 10) {
+    return { success: false, error: 'Please enter a valid phone number.' };
+  }
+  if (!password || String(password).length < 8) {
+    return { success: false, error: 'Password must be at least 8 characters.' };
+  }
+  return { success: true };
+}
+
+function normalizeEmail_(email) {
+  return trim_(email).toLowerCase();
+}
+
+function normalizePhone_(phone) {
+  return trim_(phone).replace(/[^\d+]/g, '');
+}
+
+function loginQueryFromIdentifier_(identifier) {
+  const value = trim_(identifier);
+  if (value.indexOf('@') !== -1) return { email: value };
+  return { phone: value };
+}
+
+function hashPassword_(password, salt) {
+  return sha256Hex_(String(salt || '') + ':' + String(password || ''));
+}
+
+function createCustomerSession_(row, columns) {
+  const token = Utilities.getUuid() + Utilities.getUuid();
+  const customer = publicCustomerFromRow_(row, columns);
+  CacheService.getScriptCache().put(customerSessionKey_(token), JSON.stringify(customer), CUSTOMER_SESSION_SECS);
+  return token;
+}
+
+function verifyCustomerSession_(token) {
+  if (!token) return null;
+  const cache = CacheService.getScriptCache();
+  const key = customerSessionKey_(token);
+  const cached = cache.get(key);
+  if (!cached) return null;
+
+  try {
+    const customer = JSON.parse(cached);
+    cache.put(key, cached, CUSTOMER_SESSION_SECS);
+    return customer;
+  } catch (e) {
+    cache.remove(key);
+    return null;
+  }
+}
+
+function customerSessionKey_(token) {
+  return 'CUSTOMER_SESSION_' + String(token || '').replace(/[^a-zA-Z0-9-]/g, '').slice(0, 100);
+}
+
+function publicCustomerFromRow_(row, columns) {
+  return {
+    customerId: trim_(row[columns.customerId]),
+    name: trim_(row[columns.name]),
+    email: normalizeEmail_(row[columns.email]),
+    phone: columns.phone === -1 ? '' : trim_(row[columns.phone]),
+    accountStatus: trim_(row[columns.accountStatus]) || 'Active',
+    subscriptionPlan: columns.subscriptionPlan === -1 ? '' : trim_(row[columns.subscriptionPlan]),
+    monthlyReservationLimit: columns.monthlyReservationLimit === -1 ? '' : trim_(row[columns.monthlyReservationLimit]),
+    subscriptionStatus: trim_(row[columns.subscriptionStatus]),
+    authMethod: trim_(row[columns.authMethod])
+  };
 }
 
 function ensureBooksReservationOwnerColumn_(ss) {
