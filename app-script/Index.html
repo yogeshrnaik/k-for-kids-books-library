@@ -888,10 +888,9 @@ function bookCardHtml(book) {
     : '';
   const placeholder = `<div class="book-img-placeholder" ${book.imageUrl ? 'style="display:none"' : ''}>
       <i class="bi bi-book"></i><small>${escHtml(book.bookNo)}</small></div>`;
-  const adminInfo = adminMode && (book.reservedBy || book.issuedTo)
+  const adminInfo = adminMode && book.issuedTo
     ? `<div class="admin-card-info">
-        ${book.reservedBy ? '<i class="bi bi-bookmark me-1" style="color:orange"></i>' + escHtml(book.reservedBy) : ''}
-        ${book.issuedTo   ? '<i class="bi bi-person me-1"></i>' + escHtml(book.issuedTo)   : ''}
+        <i class="bi bi-person me-1"></i>${escHtml(book.issuedTo)}
       </div>`
     : '';
   return `<div class="book-card ${book.status !== 'Available' ? 'unavailable' : ''}"
@@ -973,9 +972,8 @@ function openBookDetail(bookNo) {
     reservationInfo = adminMode
       ? `<div class="alert alert-warning py-2 px-3 mt-2 mb-0" style="font-size:.82rem">
            <i class="bi bi-bookmark-fill me-1"></i>
-           Reserved by <b>${escHtml(book.reservedBy)}</b>
-           ${book.phone ? '<br>📞 ' + escHtml(book.phone) : ''}
-           ${book.notes ? '<br><i>' + escHtml(book.notes) + '</i>' : ''}
+           This book is currently reserved.
+           ${book.reservationId ? '<br><small>Reservation ID: ' + escHtml(book.reservationId) + '</small>' : ''}
          </div>`
       : `<div class="alert alert-warning py-2 px-3 mt-2 mb-0" style="font-size:.82rem">
            <i class="bi bi-bookmark-fill me-1"></i>
@@ -986,7 +984,6 @@ function openBookDetail(bookNo) {
       ? `<div class="alert alert-danger py-2 px-3 mt-2 mb-0" style="font-size:.82rem">
            <i class="bi bi-person-fill me-1"></i>
            Issued to <b>${escHtml(book.issuedTo)}</b>
-           ${book.issueDate ? ' on <b>' + escHtml(book.issueDate) + '</b>' : ''}
          </div>`
       : `<div class="alert alert-danger py-2 px-3 mt-2 mb-0" style="font-size:.82rem">
            <i class="bi bi-person-fill me-1"></i>
@@ -1027,6 +1024,30 @@ function openBookDetail(bookNo) {
   footer.innerHTML = `<button class="btn btn-secondary" data-bs-dismiss="modal">Close</button>${unreserveBtn}${reserveBtn}`;
 
   bookModal.show();
+  hydrateMyReservationAction(book);
+}
+
+function hydrateMyReservationAction(book) {
+  if (!currentCustomer || !customerToken || book.status !== 'Reserved' || book.isMyReservation) return;
+
+  google.script.run
+    .withSuccessHandler(res => {
+      if (!res || !res.success || !Array.isArray(res.reservations)) return;
+      const reservation = res.reservations.find(r => reservationBookKey(r.bookNo) === reservationBookKey(book.bookNo));
+      if (!reservation) return;
+
+      book.isMyReservation = true;
+      book.reservationId = reservation.reservationId;
+      activeBook = book;
+
+      const footer = document.getElementById('modalFooter');
+      if (!footer || document.getElementById('myUnreserveBtn')) return;
+      footer.insertAdjacentHTML('beforeend', `<button class="btn btn-outline-danger" id="myUnreserveBtn" onclick="unreserveMyActiveBook('${escAttr(reservation.reservationId)}')">
+        <i class="bi bi-x-circle me-1"></i>Unreserve
+      </button>`);
+    })
+    .withFailureHandler(() => {})
+    .getMyReservations(customerToken);
 }
 
 function buildAdminSection(book) {
@@ -1205,8 +1226,7 @@ function unreserveMyActiveBook(reservationId) {
 // ════════════════════════════════════════════════
 function openIssue() {
   if (!activeBook) return;
-  // Pre-fill subscriber name from reservation if exists
-  document.getElementById('iSubscriber').value = activeBook.reservedBy || activeBook.issuedTo || '';
+  document.getElementById('iSubscriber').value = activeBook.issuedTo || '';
   document.getElementById('issueBookTitle').textContent = '📚 ' + activeBook.bookName + ' (' + activeBook.bookNo + ')';
   bookModal.hide();
   setTimeout(() => issueModal.show(), 300);
@@ -1455,10 +1475,10 @@ function refreshBook(bookNo, status, issuedTo, phone, notes, issueDate = '') {
     ...allBooks[idx],
     status,
     issuedTo:   status === 'Issued'   ? issuedTo : '',
-    reservedBy: status === 'Reserved' ? issuedTo : '',
-    phone:      status === 'Reserved' ? phone    : '',
-    issueDate:  status === 'Issued'   ? issueDate : '',
-    notes,
+    reservedBy: '',
+    phone:      '',
+    issueDate:  '',
+    notes:      '',
     reservationId: status === 'Reserved' ? allBooks[idx].reservationId : '',
     reservedCustomerId: status === 'Reserved' ? allBooks[idx].reservedCustomerId : '',
     isMyReservation: status === 'Reserved' ? allBooks[idx].isMyReservation : false
@@ -1491,6 +1511,10 @@ function ageGroupSortKey(ageGroup) {
   const value = String(ageGroup || '').trim();
   if (/^all\s+age\s+groups?$/i.test(value) || /^all\s+ages?$/i.test(value)) return '999-all-ages';
   return value;
+}
+
+function reservationBookKey(bookNo) {
+  return String(bookNo || '').trim().toUpperCase().replace(/\s+/g, '');
 }
 
 // ── Loading screen animation ──────────────────────
