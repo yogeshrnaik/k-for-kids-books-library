@@ -105,6 +105,8 @@ const RESERVATION_EVENT_HEADERS = [
 
 const RESERVATION_EVENTS_QUEUE_PREFIX = 'RESERVATION_EVENT_QUEUE_ITEM_V1_';
 const RESERVATION_EVENTS_TRIGGER_PENDING_KEY = 'RESERVATION_EVENTS_TRIGGER_PENDING_V1';
+const RESERVATION_EVENTS_FLUSH_DELAY_MS = 60 * 1000;
+const RESERVATION_EVENTS_TRIGGER_STALE_MS = 10 * 60 * 1000;
 
 const LEGACY_CUSTOMER_SOURCE_HEADERS = {
   SR_NO: ['Sr', 'Sr no', 'Sr. No.', 'Sr No'],
@@ -2023,17 +2025,48 @@ function queueReservationEvent_(event) {
 
 function ensureReservationEventFlushTrigger_() {
   const props = PropertiesService.getScriptProperties();
-  if (props.getProperty(RESERVATION_EVENTS_TRIGGER_PENDING_KEY) === '1') return;
+  const now = Date.now();
+  const pendingAt = parseInt(props.getProperty(RESERVATION_EVENTS_TRIGGER_PENDING_KEY) || '0', 10);
+  const hasTrigger = hasReservationEventFlushTrigger_();
+  if (pendingAt && hasTrigger && now - pendingAt < RESERVATION_EVENTS_TRIGGER_STALE_MS) return;
+
   try {
-    props.setProperty(RESERVATION_EVENTS_TRIGGER_PENDING_KEY, '1');
+    props.setProperty(RESERVATION_EVENTS_TRIGGER_PENDING_KEY, String(now));
     ScriptApp.newTrigger('flushReservationEventsQueue')
       .timeBased()
-      .after(60 * 1000)
+      .after(RESERVATION_EVENTS_FLUSH_DELAY_MS)
       .create();
   } catch (e) {
     props.deleteProperty(RESERVATION_EVENTS_TRIGGER_PENDING_KEY);
     Logger.log('ensureReservationEventFlushTrigger_ error: ' + e.message);
   }
+}
+
+function hasReservationEventFlushTrigger_() {
+  try {
+    return ScriptApp.getProjectTriggers().some(trigger => trigger.getHandlerFunction() === 'flushReservationEventsQueue');
+  } catch (e) {
+    Logger.log('hasReservationEventFlushTrigger_ error: ' + e.message);
+    return false;
+  }
+}
+
+function getReservationEventQueueStatus() {
+  const props = PropertiesService.getScriptProperties();
+  const allProps = props.getProperties();
+  const queueKeys = Object.keys(allProps).filter(key => key.indexOf(RESERVATION_EVENTS_QUEUE_PREFIX) === 0);
+  const pendingAt = parseInt(props.getProperty(RESERVATION_EVENTS_TRIGGER_PENDING_KEY) || '0', 10);
+  const triggerCount = ScriptApp.getProjectTriggers()
+    .filter(trigger => trigger.getHandlerFunction() === 'flushReservationEventsQueue')
+    .length;
+
+  return {
+    success: true,
+    queuedEvents: queueKeys.length,
+    flushTriggerCount: triggerCount,
+    pendingSince: pendingAt ? new Date(pendingAt).toISOString() : '',
+    pendingAgeSeconds: pendingAt ? Math.round((Date.now() - pendingAt) / 1000) : 0
+  };
 }
 
 function flushReservationEventsQueue() {
