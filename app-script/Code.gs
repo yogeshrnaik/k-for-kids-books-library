@@ -719,7 +719,6 @@ function getBooks(filters, adminCredential, customerToken) {
   try {
     const isAdmin = adminCredential ? verifyAdminCredential_(adminCredential) : false;
     const currentCustomer = customerToken ? verifyCustomerSession_(customerToken) : null;
-    const myReservationsByBookNo = currentCustomer ? getActiveReservationMapByBookNo_(currentCustomer.customerId) : {};
 
     // Serve public books from cache when possible (admin always bypasses cache)
     if (!isAdmin && !customerToken && !filters) {
@@ -730,14 +729,11 @@ function getBooks(filters, adminCredential, customerToken) {
     const { sheet, headerRow, columns } = getSheetAndHeader_();
     const linkColumns = getExistingBookReservationLinkColumns_(sheet, headerRow);
     const range    = sheet.getDataRange();
-    const data     = range.getValues();
     const displayData = range.getDisplayValues();
-    const imageMap = getImageMap_();
-    const tz       = Session.getScriptTimeZone();
+    const imageMap = getCachedImageMap_();
 
     const books = [];
-    for (let i = headerRow + 1; i < data.length; i++) {
-      const row        = data[i];
+    for (let i = headerRow + 1; i < displayData.length; i++) {
       const displayRow = displayData[i];
       const bookNo     = trim_(displayRow[columns.BOOK_NO]);
       if (!bookNo)  continue;
@@ -753,16 +749,12 @@ function getBooks(filters, adminCredential, customerToken) {
 
       let status = trim_(displayRow[columns.STATUS]);
       if (!status) status = issuedTo ? 'Issued' : 'Available';
-      const fallbackReservation = status === 'Reserved' ? myReservationsByBookNo[reservationBookKey_(bookNo)] : null;
-      const effectiveReservationId = reservationId || (fallbackReservation ? fallbackReservation.reservationId : '');
-      const effectiveReservedCustomerId = reservedCustomerId || (fallbackReservation ? currentCustomer.customerId : '');
+      const effectiveReservationId = reservationId;
+      const effectiveReservedCustomerId = reservedCustomerId;
       const isMyReservation = Boolean(
         currentCustomer &&
         currentCustomer.customerId &&
-        (
-          reservedCustomerId === currentCustomer.customerId ||
-          Boolean(fallbackReservation)
-        )
+        reservedCustomerId === currentCustomer.customerId
       );
 
       if (filters) {
@@ -1843,14 +1835,6 @@ function getActiveReservationsForCustomer_(customerId) {
   return reservations;
 }
 
-function getActiveReservationMapByBookNo_(customerId) {
-  const map = {};
-  getActiveReservationsForCustomer_(customerId).forEach(reservation => {
-    if (reservation.bookNo) map[reservationBookKey_(reservation.bookNo)] = reservation;
-  });
-  return map;
-}
-
 function reservationBookKey_(bookNo) {
   return trim_(bookNo).toUpperCase().replace(/\s+/g, '');
 }
@@ -2326,6 +2310,17 @@ function getImageMap_() {
 
   try { cache.put(IMAGE_CACHE_KEY, JSON.stringify(map), 1800); } catch (e) {}
   return map;
+}
+
+function getCachedImageMap_() {
+  const cached = CacheService.getScriptCache().get(IMAGE_CACHE_KEY);
+  if (!cached) return {};
+  try {
+    return JSON.parse(cached);
+  } catch (e) {
+    CacheService.getScriptCache().remove(IMAGE_CACHE_KEY);
+    return {};
+  }
 }
 
 function recordImageFilesInFolder_(folder, fileIdMap, normalizedFileIdMap) {
