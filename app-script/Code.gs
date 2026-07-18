@@ -24,8 +24,7 @@ const CONFIG = {
 
   // Customer DB sheet name
   CUSTOMER_SHEET_NAME: 'Customer DB',
-  CUSTOMER_DETAILS_SHEET_NAME: 'Customer-Details',
-  RESERVATION_EVENTS_SHEET_NAME: 'Reservation-Events'
+  CUSTOMER_DETAILS_SHEET_NAME: 'Customer-Details'
 };
 
 // Header names in the book source sheet. Code resolves these to column positions
@@ -89,24 +88,6 @@ const CUSTOMER_DETAILS_HEADERS = [
   'Last Login At',
   'Notes'
 ];
-
-const RESERVATION_EVENT_HEADERS = [
-  'Event ID',
-  'Reservation ID',
-  'Event Type',
-  'Customer ID',
-  'Customer Name',
-  'Book No',
-  'Book Name',
-  'Occurred At',
-  'Source',
-  'Details'
-];
-
-const RESERVATION_EVENTS_QUEUE_PREFIX = 'RESERVATION_EVENT_QUEUE_ITEM_V1_';
-const RESERVATION_EVENTS_TRIGGER_PENDING_KEY = 'RESERVATION_EVENTS_TRIGGER_PENDING_V1';
-const RESERVATION_EVENTS_FLUSH_DELAY_MS = 60 * 1000;
-const RESERVATION_EVENTS_TRIGGER_STALE_MS = 10 * 60 * 1000;
 
 const LEGACY_CUSTOMER_SOURCE_HEADERS = {
   SR_NO: ['Sr', 'Sr no', 'Sr. No.', 'Sr No'],
@@ -636,9 +617,9 @@ function setupImageNames() {
 /**
  * Phase 1 setup/migration. Safe to run more than once.
  *
- * Creates Customer Details and Reservation Events in the new WebApp Data
- * spreadsheet, copies legacy Customer DB rows, and adds reservation ownership
- * support to Books-DB. Existing legacy sheets are read-only in this phase.
+ * Creates Customer Details in the new WebApp Data spreadsheet, copies legacy
+ * Customer DB rows, and adds reservation ownership support to Books-DB.
+ * Existing legacy sheets are read-only in this phase.
  */
 function setupCustomerReservationSystem(adminCredential, options) {
   try {
@@ -646,8 +627,6 @@ function setupCustomerReservationSystem(adminCredential, options) {
       return { success: false, error: 'Setup is restricted to the spreadsheet owner or an active admin session.' };
     }
 
-    options = options || {};
-    const migrateHistory = options.migrateHistory !== false;
     const now = new Date();
     const summary = {
       success: true,
@@ -658,8 +637,6 @@ function setupCustomerReservationSystem(adminCredential, options) {
       generatedCustomerIds: 0,
       generatedInviteCodes: 0,
       inviteCodes: [],
-      migratedReservationRows: 0,
-      skippedReservationSheets: [],
       messages: []
     };
 
@@ -682,28 +659,8 @@ function setupCustomerReservationSystem(adminCredential, options) {
     summary.generatedInviteCodes = customerSetup.generatedInviteCodes;
     summary.inviteCodes = customerSetup.inviteCodes;
 
-    const reservationEventsSheet = ensureSheetWithHeaders_(
-      targetSs,
-      CONFIG.RESERVATION_EVENTS_SHEET_NAME,
-      RESERVATION_EVENT_HEADERS,
-      summary
-    );
-    if (migrateHistory) {
-      const historySetup = migrateLegacyReservationHistory_(
-        legacySs,
-        reservationEventsSheet.sheet,
-        reservationEventsSheet.headerRow,
-        customerSetup.customerIdByName,
-        now
-      );
-      summary.migratedReservationRows = historySetup.migratedReservationRows;
-      summary.skippedReservationSheets = historySetup.skippedReservationSheets;
-    } else {
-      summary.messages.push('Legacy customer-tab history migration skipped by option.');
-    }
-
     summary.messages.push('Legacy Customer DB was read only and not modified.');
-    summary.messages.push('Live reservations use Books-DB; migrated history is stored in Reservation-Events.');
+    summary.messages.push('Live reservations use Books-DB only.');
     return summary;
   } catch (err) {
     return reportError_('setupCustomerReservationSystem', err);
@@ -891,18 +848,6 @@ function reserveBook(bookNo, subscriberName, phone, notes) {
       bookRow[linkColumns.reservationUpdatedAt] = now;
       setSheetRowValues_(sheet, bookRowNumber, bookRow);
 
-      queueReservationEvent_({
-        reservationId,
-        eventType: 'RESERVED',
-        customerId: '',
-        customerName: subscriberName,
-        bookNo: normalizedBookNo,
-        bookName,
-        occurredAt: now,
-        source: 'Public Web App',
-        details: JSON.stringify({ phone, notes })
-      });
-
       invalidatePublicBooksCache_();
       return { success: true, message: '✅ Book reserved! We will contact you when it\'s ready.', reservationId };
     } finally {
@@ -983,18 +928,6 @@ function reserveBookForCustomer(bookNo, customerToken) {
     bookRow[linkColumns.reservationUpdatedAt] = now;
     setSheetRowValues_(sheet, bookRowNumber, bookRow);
     adjustCustomerActiveReservationCount_(customerContext, 1);
-
-    queueReservationEvent_({
-      reservationId,
-      eventType: 'RESERVED',
-      customerId: customer.customerId,
-      customerName: customer.name,
-      bookNo: normalizedBookNo,
-      bookName,
-      occurredAt: now,
-      source: 'Customer Web App',
-      details: ''
-    });
 
     invalidatePublicBooksCache_();
     return {
@@ -1123,18 +1056,6 @@ function unreserveMyBook(reservationId, customerToken, bookNo) {
 
     const customerContext = getCustomerRowContextById_(sessionCustomer.customerId);
     if (customerContext) adjustCustomerActiveReservationCount_(customerContext, -1);
-
-    queueReservationEvent_({
-      reservationId,
-      eventType: 'CANCELLED',
-      customerId: sessionCustomer.customerId,
-      customerName: sessionCustomer.name || '',
-      bookNo: normalizedBookNo,
-      bookName,
-      occurredAt: now,
-      source: 'Customer Web App',
-      details: 'Customer self-unreserve'
-    });
 
     invalidatePublicBooksCache_();
     return { success: true, message: 'Reservation cancelled.', bookNo: normalizedBookNo, reservationId };
@@ -2001,133 +1922,6 @@ function findReservedBookRowByReservationId_(sheet, headerRow, linkColumns, rese
   return rowNumber || null;
 }
 
-function queueReservationEvent_(event) {
-  try {
-    const props = PropertiesService.getScriptProperties();
-    const queuedEvent = {
-      eventId: Utilities.getUuid(),
-      reservationId: trim_(event.reservationId),
-      eventType: trim_(event.eventType),
-      customerId: trim_(event.customerId),
-      customerName: trim_(event.customerName),
-      bookNo: trim_(event.bookNo),
-      bookName: trim_(event.bookName),
-      occurredAt: event.occurredAt instanceof Date ? event.occurredAt.toISOString() : trim_(event.occurredAt),
-      source: trim_(event.source),
-      details: trim_(event.details)
-    };
-    props.setProperty(RESERVATION_EVENTS_QUEUE_PREFIX + Date.now() + '_' + queuedEvent.eventId, JSON.stringify(queuedEvent));
-    ensureReservationEventFlushTrigger_();
-  } catch (e) {
-    Logger.log('queueReservationEvent_ error: ' + e.message);
-  }
-}
-
-function ensureReservationEventFlushTrigger_() {
-  const props = PropertiesService.getScriptProperties();
-  const now = Date.now();
-  const pendingAt = parseInt(props.getProperty(RESERVATION_EVENTS_TRIGGER_PENDING_KEY) || '0', 10);
-  const hasTrigger = hasReservationEventFlushTrigger_();
-  if (pendingAt && hasTrigger && now - pendingAt < RESERVATION_EVENTS_TRIGGER_STALE_MS) return;
-
-  try {
-    props.setProperty(RESERVATION_EVENTS_TRIGGER_PENDING_KEY, String(now));
-    ScriptApp.newTrigger('flushReservationEventsQueue')
-      .timeBased()
-      .after(RESERVATION_EVENTS_FLUSH_DELAY_MS)
-      .create();
-  } catch (e) {
-    props.deleteProperty(RESERVATION_EVENTS_TRIGGER_PENDING_KEY);
-    Logger.log('ensureReservationEventFlushTrigger_ error: ' + e.message);
-  }
-}
-
-function hasReservationEventFlushTrigger_() {
-  try {
-    return ScriptApp.getProjectTriggers().some(trigger => trigger.getHandlerFunction() === 'flushReservationEventsQueue');
-  } catch (e) {
-    Logger.log('hasReservationEventFlushTrigger_ error: ' + e.message);
-    return false;
-  }
-}
-
-function getReservationEventQueueStatus() {
-  const props = PropertiesService.getScriptProperties();
-  const allProps = props.getProperties();
-  const queueKeys = Object.keys(allProps).filter(key => key.indexOf(RESERVATION_EVENTS_QUEUE_PREFIX) === 0);
-  const pendingAt = parseInt(props.getProperty(RESERVATION_EVENTS_TRIGGER_PENDING_KEY) || '0', 10);
-  const triggerCount = ScriptApp.getProjectTriggers()
-    .filter(trigger => trigger.getHandlerFunction() === 'flushReservationEventsQueue')
-    .length;
-
-  return {
-    success: true,
-    queuedEvents: queueKeys.length,
-    flushTriggerCount: triggerCount,
-    pendingSince: pendingAt ? new Date(pendingAt).toISOString() : '',
-    pendingAgeSeconds: pendingAt ? Math.round((Date.now() - pendingAt) / 1000) : 0
-  };
-}
-
-function flushReservationEventsQueue() {
-  const lock = LockService.getScriptLock();
-  lock.waitLock(30000);
-  try {
-    const props = PropertiesService.getScriptProperties();
-    const allProps = props.getProperties();
-    const queueKeys = Object.keys(allProps)
-      .filter(key => key.indexOf(RESERVATION_EVENTS_QUEUE_PREFIX) === 0)
-      .sort();
-    const queued = [];
-    const invalidKeys = [];
-    queueKeys.forEach(key => {
-      try {
-        queued.push(JSON.parse(allProps[key]));
-      } catch (e) {
-        invalidKeys.push(key);
-      }
-    });
-    if (!queued.length) {
-      invalidKeys.forEach(key => props.deleteProperty(key));
-      props.deleteProperty(RESERVATION_EVENTS_TRIGGER_PENDING_KEY);
-      return { success: true, appended: 0 };
-    }
-
-    const ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
-    const eventSheet = ensureSheetWithHeaders_(ss, CONFIG.RESERVATION_EVENTS_SHEET_NAME, RESERVATION_EVENT_HEADERS);
-    const headerValues = eventSheet.sheet.getRange(eventSheet.headerRow + 1, 1, 1, eventSheet.sheet.getLastColumn()).getValues()[0];
-    const columns = buildReservationEventColumns_(getHeaderMap_(headerValues));
-    const width = eventSheet.sheet.getLastColumn();
-    const rows = queued.map(event => {
-      const row = new Array(width).fill('');
-      row[columns.eventId] = event.eventId;
-      row[columns.reservationId] = event.reservationId;
-      row[columns.eventType] = event.eventType;
-      row[columns.customerId] = event.customerId;
-      row[columns.customerName] = event.customerName;
-      row[columns.bookNo] = event.bookNo;
-      row[columns.bookName] = event.bookName;
-      row[columns.occurredAt] = event.occurredAt ? new Date(event.occurredAt) : new Date();
-      row[columns.source] = event.source;
-      row[columns.details] = event.details;
-      return row;
-    });
-
-    eventSheet.sheet
-      .getRange(eventSheet.sheet.getLastRow() + 1, 1, rows.length, width)
-      .setValues(rows);
-    queueKeys.forEach(key => props.deleteProperty(key));
-    invalidKeys.forEach(key => props.deleteProperty(key));
-    props.deleteProperty(RESERVATION_EVENTS_TRIGGER_PENDING_KEY);
-    return { success: true, appended: rows.length };
-  } catch (err) {
-    PropertiesService.getScriptProperties().deleteProperty(RESERVATION_EVENTS_TRIGGER_PENDING_KEY);
-    return reportError_('flushReservationEventsQueue', err);
-  } finally {
-    lock.releaseLock();
-  }
-}
-
 function ensureBooksReservationOwnerColumn_(ss) {
   const sheet = ss.getSheetByName(CONFIG.MASTER_SHEET_NAME);
   if (!sheet) throw new Error('Sheet "' + CONFIG.MASTER_SHEET_NAME + '" not found.');
@@ -2428,164 +2222,8 @@ function sha256Hex_(value) {
   }).join('');
 }
 
-function migrateLegacyReservationHistory_(legacySs, targetSheet, targetHeaderRow, customerIdByName, now) {
-  const targetHeaderValues = targetSheet.getRange(targetHeaderRow + 1, 1, 1, targetSheet.getLastColumn()).getValues()[0];
-  const targetHeaderMap = getHeaderMap_(targetHeaderValues);
-  const columns = buildReservationEventColumns_(targetHeaderMap);
-  const existingKeys = readExistingReservationMigrationKeys_(targetSheet, targetHeaderRow, columns);
-  const excludedNames = legacyMigrationExcludedSheetNames_();
-  const width = targetSheet.getLastColumn();
-
-  let migratedReservationRows = 0;
-  const skippedReservationSheets = [];
-
-  legacySs.getSheets().forEach(sheet => {
-    const sheetName = sheet.getName();
-    if (excludedNames[normalizeHeader_(sheetName)]) return;
-
-    const data = sheet.getDataRange().getValues();
-    const historyHeader = findLegacyHistoryHeader_(data);
-    if (!historyHeader) {
-      skippedReservationSheets.push(sheetName);
-      return;
-    }
-
-    const customerName = sheetName;
-    const customerId = customerIdByName[normalizeCustomerNameKey_(customerName)] || '';
-    const rowsToAppend = [];
-
-    for (let i = historyHeader.headerRow + 1; i < data.length; i++) {
-      const sourceRow = data[i];
-      const bookNo = trim_(getRowValue_(sourceRow, historyHeader.columns.bookNo));
-      const bookName = trim_(getRowValue_(sourceRow, historyHeader.columns.bookName));
-      if (!bookNo && !bookName) continue;
-
-      const migratedRow = i + 1;
-      const migrationKey = sheetName + '|' + migratedRow;
-      if (existingKeys[migrationKey]) continue;
-
-      const issuedAt = getRowValue_(sourceRow, historyHeader.columns.issuedAt);
-      const returnedAt = getRowValue_(sourceRow, historyHeader.columns.returnedAt);
-      const sourceStatus = trim_(getRowValue_(sourceRow, historyHeader.columns.status));
-      const status = sourceStatus || (returnedAt ? 'Returned' : 'Issued');
-      const reservationId = 'LEGACY-' + normalizeReservationIdPart_(sheetName) + '-' + migratedRow;
-      const occurredAt = returnedAt || issuedAt || now;
-      const details = {
-        status,
-        issuedAt: issuedAt || '',
-        returnedAt: returnedAt || '',
-        reservationMonth: formatReservationMonth_(issuedAt),
-        migratedFromSheet: sheetName,
-        migratedRow
-      };
-      const rowValues = new Array(width).fill('');
-
-      rowValues[columns.eventId] = Utilities.getUuid();
-      rowValues[columns.reservationId] = reservationId;
-      rowValues[columns.customerId] = customerId;
-      rowValues[columns.customerName] = customerName;
-      rowValues[columns.bookNo] = bookNo;
-      rowValues[columns.bookName] = bookName;
-      rowValues[columns.eventType] = 'LEGACY_' + normalizeReservationIdPart_(status);
-      rowValues[columns.occurredAt] = occurredAt;
-      rowValues[columns.source] = 'Legacy Customer Sheet';
-      rowValues[columns.details] = JSON.stringify(details);
-      rowsToAppend.push(rowValues);
-      existingKeys[migrationKey] = true;
-    }
-
-    if (rowsToAppend.length) {
-      targetSheet.getRange(targetSheet.getLastRow() + 1, 1, rowsToAppend.length, width)
-        .setValues(rowsToAppend);
-      migratedReservationRows += rowsToAppend.length;
-    }
-  });
-
-  return { migratedReservationRows, skippedReservationSheets };
-}
-
-function readExistingReservationMigrationKeys_(sheet, headerRow, columns) {
-  const data = sheet.getDataRange().getValues();
-  const keys = {};
-  for (let i = headerRow + 1; i < data.length; i++) {
-    try {
-      const details = JSON.parse(trim_(data[i][columns.details]) || '{}');
-      const fromSheet = trim_(details.migratedFromSheet);
-      const fromRow = trim_(details.migratedRow);
-      if (fromSheet && fromRow) keys[fromSheet + '|' + fromRow] = true;
-    } catch (e) {
-      // Ignore non-JSON event details; only migrated legacy rows need keys.
-    }
-  }
-  return keys;
-}
-
-function buildReservationEventColumns_(headerMap) {
-  const columns = {
-    eventId: getHeaderIndex_(headerMap, 'Event ID'),
-    reservationId: getHeaderIndex_(headerMap, 'Reservation ID'),
-    eventType: getHeaderIndex_(headerMap, 'Event Type'),
-    customerId: getHeaderIndex_(headerMap, 'Customer ID'),
-    customerName: getHeaderIndex_(headerMap, 'Customer Name'),
-    bookNo: getHeaderIndex_(headerMap, 'Book No'),
-    bookName: getHeaderIndex_(headerMap, 'Book Name'),
-    occurredAt: getHeaderIndex_(headerMap, 'Occurred At'),
-    source: getHeaderIndex_(headerMap, 'Source'),
-    details: getHeaderIndex_(headerMap, 'Details')
-  };
-
-  Object.keys(columns).forEach(key => {
-    if (columns[key] === -1) throw new Error('Reservation Events is missing required column: ' + key);
-  });
-  return columns;
-}
-
-function legacyMigrationExcludedSheetNames_() {
-  const names = [
-    CONFIG.MASTER_SHEET_NAME,
-    'Master DB',
-    CONFIG.CUSTOMER_SHEET_NAME,
-    CONFIG.CUSTOMER_DETAILS_SHEET_NAME,
-    CONFIG.RESERVATION_EVENTS_SHEET_NAME
-  ];
-  const excluded = {};
-  names.forEach(name => { excluded[normalizeHeader_(name)] = true; });
-  return excluded;
-}
-
-function findLegacyHistoryHeader_(data) {
-  const maxRowsToInspect = Math.min(8, data.length);
-  for (let i = 0; i < maxRowsToInspect; i++) {
-    const headerMap = getHeaderMap_(data[i]);
-    const columns = {
-      bookNo: getHeaderIndexByAliases_(headerMap, ['BookNo', 'Book No']),
-      bookName: getHeaderIndexByAliases_(headerMap, ['Book', 'Book Name']),
-      issuedAt: getHeaderIndexByAliases_(headerMap, ['Date', 'Issued At', 'Issued Date']),
-      returnedAt: getHeaderIndexByAliases_(headerMap, ['Return date', 'Return Date', 'Returned At']),
-      status: getHeaderIndexByAliases_(headerMap, ['Status'])
-    };
-    if (columns.bookNo !== -1 && columns.bookName !== -1) {
-      return { headerRow: i, columns };
-    }
-  }
-  return null;
-}
-
 function normalizeCustomerNameKey_(name) {
   return normalizeHeader_(name);
-}
-
-function normalizeReservationIdPart_(value) {
-  return normalizeHeader_(value).toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'SHEET';
-}
-
-function formatReservationMonth_(value) {
-  if (!value) return '';
-  try {
-    return Utilities.formatDate(new Date(value), Session.getScriptTimeZone(), 'yyyy-MM');
-  } catch (e) {
-    return '';
-  }
 }
 
 function getSheetAndHeader_() {
